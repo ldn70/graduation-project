@@ -4,3 +4,7 @@ djangorestframework-simplejwt==5.5.1
 django-cors-headers==4.9.0
 pymysql==1.1.2
 python-dotenv==1.2.2
+pymongo>=4.6,<5
+scikit-learn>=1.4,<2
+xgboost>=2.0,<3
+shap>=0.45,<1

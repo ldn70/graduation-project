@@ -58,3 +58,28 @@ docker compose up --build
 cd D:\GraduationProject\backend
 ..\.venv\Scripts\python manage.py import_jobs_csv --file D:\GraduationProject\backend\data\sample_jobs.csv --truncate
 ```
+
+Optional MongoDB sync:
+```powershell
+..\.venv\Scripts\python manage.py import_jobs_csv --file D:\GraduationProject\backend\data\sample_jobs.csv --truncate --sync-mongo --mongo-truncate
+```
+
+## Recommendation Model Training
+Train Hybrid recommender artifact (TF-IDF + CF + LightFM/SVD):
+
+```powershell
+cd D:\GraduationProject\backend
+..\.venv\Scripts\python manage.py train_recommend_model
+```
+
+After training, `GET /api/recommend/jobs` will use the trained model first; if no model is found, it falls back to baseline recommendation logic.
+
+## Salary Model Training
+Train salary prediction artifact (XGBoost + SHAP explanation):
+
+```powershell
+cd D:\GraduationProject\backend
+..\.venv\Scripts\python manage.py train_salary_model
+```
+
+After training, `POST /api/salary/predict` will use XGBoost model inference and return SHAP explanation; if model is unavailable, it falls back to baseline heuristic logic.

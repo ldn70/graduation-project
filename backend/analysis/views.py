@@ -12,15 +12,30 @@ from rest_framework.views import APIView
 from core.response import error_response, success_response
 from jobs.models import Job, UserAction
 from jobs.utils import parse_experience_years, parse_salary_range_k_month, split_skills
+from .recommender import RecommenderError, get_hybrid_recommendations
+from .salary_model import SalaryModelError, predict_salary_from_payload
 
 
 class RecommendJobsView(APIView):
     def get(self, request):
         limit = int(request.GET.get("limit", 10))
+        try:
+            recommendations = get_hybrid_recommendations(request.user, limit=limit)
+            if recommendations:
+                return success_response(
+                    {"recommendations": recommendations, "total": len(recommendations)},
+                    "推荐成功（Hybrid: TF-IDF + CF + LightFM/SVD）",
+                )
+        except RecommenderError:
+            # Model not trained yet -> fallback to legacy online heuristic.
+            pass
+        except Exception:
+            # Any runtime issue in recommender should not break endpoint availability.
+            pass
+
         jobs = list(Job.objects.all()[:500])
         if not jobs:
             return success_response({"recommendations": [], "total": 0}, "暂无职位数据")
-
         user_skills = split_skills(request.user.skills or "")
         user_action_jobs = set(
             UserAction.objects.filter(user=request.user).values_list("job_id", flat=True)
@@ -83,7 +98,10 @@ class RecommendJobsView(APIView):
             dedup.append(row)
             if len(dedup) >= limit:
                 break
-        return success_response({"recommendations": dedup, "total": len(dedup)}, "推荐成功")
+        return success_response(
+            {"recommendations": dedup, "total": len(dedup)},
+            "推荐成功（Fallback baseline）",
+        )
 
 
 class SkillDemandView(APIView):
@@ -145,12 +163,30 @@ class SalaryPredictView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        education = str(request.data.get("education", "本科"))
-        experience = parse_experience_years(request.data.get("experience"))
-        skills = request.data.get("skills", [])
+        payload = {
+            "job_title": request.data.get("job_title", ""),
+            "education": request.data.get("education", "本科"),
+            "experience": request.data.get("experience", ""),
+            "skills": request.data.get("skills", []),
+            "city": request.data.get("city", ""),
+            "industry": request.data.get("industry", ""),
+        }
+        try:
+            result = predict_salary_from_payload(payload)
+            return success_response(result, "预测成功（XGBoost + SHAP）")
+        except SalaryModelError:
+            # Model unavailable: fallback to baseline heuristic.
+            pass
+        except Exception:
+            # Keep endpoint available for demo even if model inference fails.
+            pass
+
+        education = str(payload.get("education", "本科"))
+        experience = parse_experience_years(payload.get("experience"))
+        skills = payload.get("skills", [])
         if isinstance(skills, str):
             skills = [x.strip() for x in re.split(r"[,，/|;\s]+", skills) if x.strip()]
-        city = str(request.data.get("city", ""))
+        city = str(payload.get("city", ""))
 
         edu_factor = {"大专": 0.9, "本科": 1.0, "硕士": 1.15, "博士": 1.3}.get(education, 1.0)
         city_factor = 1.2 if city in {"北京", "上海", "深圳", "广州"} else 1.0
@@ -183,7 +219,7 @@ class SalaryPredictView(APIView):
                 "confidence": round(max(0.5, min(0.95, 0.7 + math.log1p(len(skills)) * 0.05)), 2),
                 "shap_explanation": shap_like,
             },
-            "预测成功",
+            "预测成功（Fallback baseline）",
         )
 
 
