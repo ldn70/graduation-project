@@ -74,6 +74,7 @@ body {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid #c9d7d4;
@@ -134,6 +135,14 @@ button:hover {
 .jobs span {
   color: var(--muted);
   display: block;
+}
+
+.jobs.compact {
+  margin-bottom: 10px;
+}
+
+.jobs.compact li {
+  padding: 8px 10px;
 }
 
 .chart {

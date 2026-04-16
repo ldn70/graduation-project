@@ -29,7 +29,7 @@ const salaryForm = ref({
   skills: 'Python,Django,MySQL',
   city: '北京',
 })
-const trendForm = ref({ forecast: true })
+const trendForm = ref({ forecast: true, time_range: 'month' })
 
 const message = ref('')
 const jobs = ref([])
@@ -38,7 +38,7 @@ const recommendations = ref([])
 const skillDemand = ref([])
 const skillMatch = ref(null)
 const salaryResult = ref(null)
-const trendResult = ref({ historical: [], forecast: [] })
+const trendResult = ref({ historical: [], forecast: [], time_range: 'month', model_info: {} })
 
 const locationChartRef = ref(null)
 const trendChartRef = ref(null)
@@ -170,21 +170,39 @@ const renderTrendChart = () => {
   if (!trendChart) trendChart = echarts.init(trendChartRef.value)
   const historical = trendResult.value.historical || []
   const forecast = trendResult.value.forecast || []
+  const labels = [...historical.map((x) => x.date), ...forecast.map((x) => x.date)]
+  const padding = new Array(historical.length).fill(null)
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
-    legend: { data: ['历史', '预测'] },
-    xAxis: {
-      type: 'category',
-      data: [...historical.map((x) => x.date), ...forecast.map((x) => x.date)],
-    },
+    legend: { data: ['历史', '预测', '预测上界', '预测下界'] },
+    xAxis: { type: 'category', data: labels },
     yAxis: { type: 'value' },
     series: [
-      { name: '历史', type: 'line', smooth: true, data: historical.map((x) => x.count) },
+      {
+        name: '历史',
+        type: 'line',
+        smooth: true,
+        data: [...historical.map((x) => x.count), ...new Array(forecast.length).fill(null)],
+      },
       {
         name: '预测',
         type: 'line',
         smooth: true,
-        data: [...new Array(historical.length).fill(null), ...forecast.map((x) => x.count)],
+        data: [...padding, ...forecast.map((x) => x.count)],
+      },
+      {
+        name: '预测上界',
+        type: 'line',
+        smooth: true,
+        lineStyle: { type: 'dashed', width: 1 },
+        data: [...padding, ...forecast.map((x) => x.upper_bound)],
+      },
+      {
+        name: '预测下界',
+        type: 'line',
+        smooth: true,
+        lineStyle: { type: 'dashed', width: 1 },
+        data: [...padding, ...forecast.map((x) => x.lower_bound)],
       },
     ],
   })
@@ -207,7 +225,7 @@ onMounted(async () => {
     <header class="hero">
       <h1>前程无忧分析系统（重建版）</h1>
       <p>已接通：用户管理、搜索、推荐、技能分析、薪资预测、趋势分析、简历生成</p>
-      <p class="msg">{{ message }}</p>
+      <p data-testid="message" class="msg">{{ message }}</p>
     </header>
 
     <section class="grid">
@@ -224,10 +242,10 @@ onMounted(async () => {
 
       <article class="panel">
         <h2>登录与快捷操作</h2>
-        <input v-model="loginForm.username" placeholder="用户名" />
-        <input v-model="loginForm.password" type="password" placeholder="密码" />
+        <input v-model="loginForm.username" data-testid="login-username" placeholder="用户名" />
+        <input v-model="loginForm.password" data-testid="login-password" type="password" placeholder="密码" />
         <div class="row">
-          <button @click="onLogin">登录</button>
+          <button data-testid="login-submit" @click="onLogin">登录</button>
           <button @click="onGenerateResume">生成简历</button>
         </div>
         <div class="row">
@@ -240,11 +258,11 @@ onMounted(async () => {
     <section class="panel">
       <h2>招聘搜索</h2>
       <div class="row">
-        <input v-model="searchForm.keyword" placeholder="关键词（如 Python）" />
+        <input v-model="searchForm.keyword" data-testid="search-keyword" placeholder="关键词（如 Python）" />
         <input v-model="searchForm.education" placeholder="学历（如 本科）" />
-        <button @click="onSearch">查询</button>
+        <button data-testid="search-submit" @click="onSearch">查询</button>
       </div>
-      <p class="hint">总数：{{ total }}</p>
+      <p data-testid="search-total" class="hint">总数：{{ total }}</p>
       <ul class="jobs">
         <li v-for="job in jobs" :key="job.id">
           <div>
@@ -320,7 +338,29 @@ onMounted(async () => {
       </article>
       <article class="panel">
         <h2>趋势分析</h2>
-        <button @click="onFetchTrends">刷新趋势</button>
+        <div class="row">
+          <select v-model="trendForm.time_range" data-testid="trend-time-range">
+            <option value="month">月度</option>
+            <option value="quarter">季度</option>
+            <option value="year">年度</option>
+          </select>
+          <button data-testid="trend-submit" @click="onFetchTrends">刷新趋势</button>
+        </div>
+        <p data-testid="trend-backend" class="hint">模型：{{ trendResult.model_info?.backend || '-' }}</p>
+        <p class="hint">粒度：{{ trendResult.time_range || trendForm.time_range }}</p>
+        <p v-if="trendResult.model_info?.trained_at" class="hint">
+          训练时间：{{ trendResult.model_info.trained_at }}
+        </p>
+        <ul v-if="trendResult.forecast?.length" class="jobs compact">
+          <li v-for="item in trendResult.forecast" :key="item.date">
+            <div>
+              <strong>{{ item.date }}</strong>
+            </div>
+            <div>
+              <span>{{ item.lower_bound }} - {{ item.upper_bound }}</span>
+            </div>
+          </li>
+        </ul>
         <div ref="trendChartRef" class="chart"></div>
       </article>
     </section>

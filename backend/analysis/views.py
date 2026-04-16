@@ -5,7 +5,6 @@ import math
 import re
 
 from django.db.models import Q
-from django.utils import timezone
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
@@ -14,6 +13,12 @@ from jobs.models import Job, UserAction
 from jobs.utils import parse_experience_years, parse_salary_range_k_month, split_skills
 from .recommender import RecommenderError, get_hybrid_recommendations
 from .salary_model import SalaryModelError, predict_salary_from_payload
+from .trend_model import (
+    TrendModelError,
+    baseline_forecast,
+    build_historical_series,
+    forecast_from_historical,
+)
 
 
 class RecommendJobsView(APIView):
@@ -229,6 +234,7 @@ class JobTrendView(APIView):
     def get(self, request):
         industry = request.GET.get("industry", "").strip()
         job_title = request.GET.get("job_title", "").strip()
+        time_range = request.GET.get("time_range", "month").strip().lower()
         include_forecast = request.GET.get("forecast", "false").lower() == "true"
 
         query = Q()
@@ -237,36 +243,29 @@ class JobTrendView(APIView):
         if job_title:
             query &= Q(title__icontains=job_title)
 
-        jobs = Job.objects.filter(query)
-        bucket = Counter()
-        for job in jobs:
-            ts = job.publish_time or timezone.now()
-            key = ts.strftime("%Y-%m")
-            bucket[key] += 1
-
-        historical_keys = sorted(bucket.keys())
-        historical = [{"date": k, "count": bucket[k]} for k in historical_keys]
+        jobs = Job.objects.filter(query).only("publish_time")
+        historical = build_historical_series(jobs, time_range=time_range, include_empty=True)
 
         forecast = []
-        if include_forecast and len(historical) >= 2:
-            last = historical[-1]["count"]
-            prev = historical[-2]["count"]
-            delta = last - prev
-            y, m = map(int, historical[-1]["date"].split("-"))
-            for _ in range(3):
-                m += 1
-                if m > 12:
-                    y += 1
-                    m = 1
-                pred = max(1, last + delta)
-                forecast.append(
-                    {
-                        "date": f"{y:04d}-{m:02d}",
-                        "count": pred,
-                        "upper_bound": round(pred * 1.1),
-                        "lower_bound": round(pred * 0.9),
-                    }
-                )
-                last = pred
+        model_info = {"backend": "historical_only", "time_range": time_range}
+        if include_forecast and historical:
+            try:
+                result = forecast_from_historical(historical, time_range=time_range, steps=3)
+                forecast = result.get("forecast", [])
+                model_info = result.get("model_info", model_info)
+            except TrendModelError:
+                forecast = baseline_forecast(historical, time_range=time_range, steps=3)
+                model_info = {"backend": "baseline", "time_range": time_range}
+            except Exception:
+                forecast = baseline_forecast(historical, time_range=time_range, steps=3)
+                model_info = {"backend": "baseline_runtime_fallback", "time_range": time_range}
 
-        return success_response({"historical": historical, "forecast": forecast}, "趋势查询成功")
+        return success_response(
+            {
+                "historical": historical,
+                "forecast": forecast,
+                "time_range": time_range,
+                "model_info": model_info,
+            },
+            "趋势查询成功",
+        )

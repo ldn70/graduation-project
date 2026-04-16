@@ -83,3 +83,30 @@ cd D:\GraduationProject\backend
 ```
 
 After training, `POST /api/salary/predict` will use XGBoost model inference and return SHAP explanation; if model is unavailable, it falls back to baseline heuristic logic.
+
+## Trend Model Training
+Train trend forecasting artifact (Prophet + LSTM-proxy hybrid, with automatic fallback):
+
+```powershell
+cd D:\GraduationProject\backend
+..\.venv\Scripts\python manage.py train_trend_model
+```
+
+After training, `GET /api/trends/jobs?forecast=true&time_range=month` will use the trained trend model first.
+If Prophet is unavailable, it will automatically fall back to AR/LSTM-proxy forecasting.
+
+## Backend Test
+Run backend regression tests:
+
+```powershell
+cd D:\GraduationProject\backend
+..\.venv\Scripts\python manage.py test
+```
+
+## Frontend Test
+Run frontend key-flow tests:
+
+```powershell
+cd D:\GraduationProject\frontend
+npm test
+```
