@@ -34,6 +34,11 @@ body {
   gap: 16px;
 }
 
+.app-shell {
+  display: grid;
+  gap: 16px;
+}
+
 .hero {
   background: linear-gradient(120deg, #0f766e, #1e8f84);
   color: #fff;
@@ -53,6 +58,27 @@ body {
 .hero .msg {
   color: #fff3dd;
   font-weight: 600;
+}
+
+.nav {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nav-link {
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  padding: 6px 12px;
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.nav-link--active {
+  background: #ffffff;
+  color: var(--primary);
 }
 
 .grid {
@@ -110,6 +136,54 @@ button:hover {
   flex-wrap: wrap;
 }
 
+.action-hint {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid;
+}
+
+.action-hint p {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.action-hint--info {
+  border-color: #94a3b8;
+  background: #f8fafc;
+  color: #334155;
+}
+
+.action-hint--warning {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.action-hint--error {
+  border-color: #ef4444;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.ghost-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--text);
+}
+
+.ghost-link {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  color: var(--text);
+  text-decoration: none;
+  background: #fff;
+  font-weight: 600;
+}
+
 .hint {
   color: var(--muted);
   margin: 0 0 8px;
@@ -148,6 +222,10 @@ button:hover {
 .chart {
   width: 100%;
   height: 320px;
+}
+
+.narrow-panel {
+  max-width: 600px;
 }
 
 @media (max-width: 860px) {

@@ -4,6 +4,16 @@ import vue from '@vitejs/plugin-vue'
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [vue()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/echarts')) return 'vendor-echarts'
+          if (id.includes('node_modules/zrender')) return 'vendor-zrender'
+        },
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     globals: true,

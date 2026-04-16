@@ -1,13 +1,18 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 
-import App from '../App.vue'
 import * as api from '../api'
+import { message, resetDashboardState } from '../state/dashboardState'
+import AuthView from '../views/AuthView.vue'
+import SearchView from '../views/SearchView.vue'
+import TrendsView from '../views/TrendsView.vue'
 
-vi.mock('echarts', () => {
+vi.mock('../lib/echartsLoader', () => {
   return {
-    init: vi.fn(() => ({ setOption: vi.fn() })),
+    loadEcharts: vi.fn(async () => ({
+      init: vi.fn(() => ({ setOption: vi.fn(), dispose: vi.fn() })),
+    })),
   }
 })
 
@@ -73,10 +78,11 @@ describe('App key flows', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    resetDashboardState()
   })
 
   it('handles login flow and stores token', async () => {
-    const wrapper = mount(App)
+    const wrapper = mount(AuthView)
     await flushPromises()
 
     await wrapper.get('[data-testid="login-username"]').setValue('demo_user')
@@ -86,11 +92,11 @@ describe('App key flows', () => {
 
     expect(api.login).toHaveBeenCalledWith({ username: 'demo_user', password: '12345678' })
     expect(localStorage.getItem('accessToken')).toBe('token-mock')
-    expect(wrapper.get('[data-testid="message"]').text()).toContain('登录成功')
+    expect(message.value).toContain('登录成功')
   })
 
   it('handles search flow', async () => {
-    const wrapper = mount(App)
+    const wrapper = mount(SearchView)
     await flushPromises()
     vi.mocked(api.searchJobs).mockClear()
 
@@ -105,7 +111,7 @@ describe('App key flows', () => {
   })
 
   it('refreshes trend with selected time range and shows model info', async () => {
-    const wrapper = mount(App)
+    const wrapper = mount(TrendsView)
     await flushPromises()
     vi.mocked(api.fetchTrends).mockClear()
 
@@ -129,5 +135,61 @@ describe('App key flows', () => {
     await vi.waitFor(() => {
       expect(wrapper.get('[data-testid="trend-backend"]').text()).toContain('baseline')
     })
+  })
+
+  it('shows error message when search API fails', async () => {
+    const wrapper = mount(SearchView)
+    await flushPromises()
+
+    vi.mocked(api.searchJobs).mockRejectedValueOnce({
+      response: { data: { message: '查询失败：网络错误' } },
+    })
+    await wrapper.get('[data-testid="search-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(message.value).toContain('查询失败：网络错误')
+  })
+
+  it('renders empty-state total when search result has no jobs', async () => {
+    const wrapper = mount(SearchView)
+    await flushPromises()
+
+    vi.mocked(api.searchJobs).mockResolvedValueOnce({
+      data: { data: { jobs: [], total: 0 } },
+    })
+    await wrapper.get('[data-testid="search-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="search-total"]').text()).toContain('0')
+    expect(wrapper.findAll('[data-testid="search-jobs-list"] li').length).toBe(0)
+  })
+
+  it('shows login guidance when search requires authentication', async () => {
+    const wrapper = mount(SearchView)
+    await flushPromises()
+
+    vi.mocked(api.searchJobs).mockRejectedValueOnce({
+      response: { status: 401, data: { message: '认证失败' } },
+    })
+    await wrapper.get('[data-testid="search-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="search-action-hint"]').text()).toContain('认证失败')
+    expect(wrapper.get('[data-testid="search-action-hint"] a').attributes('href')).toBe('/auth')
+  })
+
+  it('shows timeout hint and retry action for trends', async () => {
+    const wrapper = mount(TrendsView)
+    await flushPromises()
+
+    vi.mocked(api.fetchTrends).mockRejectedValueOnce({
+      code: 'ECONNABORTED',
+      message: 'timeout of 10000ms exceeded',
+    })
+    await wrapper.get('[data-testid="trend-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="trend-action-hint"]').text()).toContain('请求超时')
+    expect(wrapper.get('[data-testid="trend-action-hint"]').text()).toContain('重试趋势分析')
   })
 })
