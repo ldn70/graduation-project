@@ -71,3 +71,12 @@ class JobSearchApiTests(APITestCase):
         titles = {item["title"] for item in resp.data["data"]["jobs"]}
         self.assertIn("Python开发工程师", titles)
         self.assertIn("数据分析师", titles)
+
+    def test_search_invalid_pagination_returns_code(self):
+        resp = self.client.get("/api/jobs/search", {"page": "abc", "per_page": 10})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "JOB_SEARCH_PAGE_INVALID")
+
+        resp = self.client.get("/api/jobs/search", {"page": 1, "per_page": 0})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "JOB_SEARCH_PER_PAGE_INVALID")

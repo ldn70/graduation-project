@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted } from 'vue'
-import { jobs, onSearch, searchForm, searchHint, total } from '../state/dashboardState'
+import { jobs, loading, onSearch, searchForm, searchHint, total } from '../state/dashboardState'
 
 onMounted(async () => {
   if (!jobs.value.length) {
@@ -15,7 +15,14 @@ onMounted(async () => {
     <div class="row">
       <input v-model="searchForm.keyword" data-testid="search-keyword" placeholder="关键词（如 Python）" />
       <input v-model="searchForm.education" placeholder="学历（如 本科）" />
-      <button data-testid="search-submit" @click="onSearch">查询</button>
+      <button
+        data-testid="search-submit"
+        :disabled="loading.search"
+        :class="{ 'is-loading': loading.search }"
+        @click="onSearch"
+      >
+        {{ loading.search ? '查询中...' : '查询' }}
+      </button>
     </div>
     <div
       v-if="searchHint"
@@ -26,13 +33,25 @@ onMounted(async () => {
       <p>{{ searchHint.message }}</p>
       <div class="row">
         <a v-if="searchHint.showLogin" href="/auth" class="ghost-link">去登录</a>
-        <button v-if="searchHint.showRetry" data-testid="search-retry" class="ghost-btn" @click="onSearch">
+        <button
+          v-if="searchHint.showRetry"
+          data-testid="search-retry"
+          class="ghost-btn"
+          :disabled="loading.search"
+          @click="onSearch"
+        >
           重试查询
         </button>
       </div>
     </div>
     <p data-testid="search-total" class="hint">总数：{{ total }}</p>
-    <ul data-testid="search-jobs-list" class="jobs">
+    <ul v-if="loading.search" data-testid="search-skeleton" class="jobs skeleton-list">
+      <li v-for="index in 4" :key="`search-skeleton-${index}`" class="skeleton-item">
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line short"></div>
+      </li>
+    </ul>
+    <ul v-else data-testid="search-jobs-list" class="jobs">
       <li v-for="job in jobs" :key="job.id">
         <div>
           <strong>{{ job.title }}</strong>

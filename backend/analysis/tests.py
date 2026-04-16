@@ -270,6 +270,18 @@ class AnalysisApiTests(APITestCase):
         self.assertIn("match_rate", match.data["data"])
         self.assertIn("missing_skills", match.data["data"])
 
+    def test_skill_match_requires_job_id_code(self):
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get("/api/skills/match")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "SKILL_MATCH_JOB_ID_REQUIRED")
+
+    def test_recommend_invalid_limit_code(self):
+        self.client.force_authenticate(user=self.user)
+        resp = self.client.get("/api/recommend/jobs", {"limit": "bad"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "RECOMMEND_LIMIT_INVALID")
+
     def test_salary_predict_api(self):
         resp = self.client.post(
             "/api/salary/predict",

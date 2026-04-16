@@ -23,7 +23,12 @@ from .trend_model import (
 
 class RecommendJobsView(APIView):
     def get(self, request):
-        limit = int(request.GET.get("limit", 10))
+        try:
+            limit = int(request.GET.get("limit", 10))
+        except (TypeError, ValueError):
+            return error_response("limit 参数格式错误", 400, code="RECOMMEND_LIMIT_INVALID")
+        if limit <= 0:
+            return error_response("limit 必须大于 0", 400, code="RECOMMEND_LIMIT_INVALID")
         try:
             recommendations = get_hybrid_recommendations(request.user, limit=limit)
             if recommendations:
@@ -115,7 +120,12 @@ class SkillDemandView(APIView):
     def get(self, request):
         industry = request.GET.get("industry", "").strip()
         job_title = request.GET.get("job_title", "").strip()
-        top_n = int(request.GET.get("top_n", 20))
+        try:
+            top_n = int(request.GET.get("top_n", 20))
+        except (TypeError, ValueError):
+            return error_response("top_n 参数格式错误", 400, code="SKILL_DEMAND_TOP_N_INVALID")
+        if top_n <= 0:
+            return error_response("top_n 必须大于 0", 400, code="SKILL_DEMAND_TOP_N_INVALID")
 
         query = Q()
         if industry:
@@ -141,12 +151,12 @@ class SkillMatchView(APIView):
     def get(self, request):
         job_id = request.GET.get("job_id")
         if not job_id:
-            return error_response("缺少 job_id 参数", 400)
+            return error_response("缺少 job_id 参数", 400, code="SKILL_MATCH_JOB_ID_REQUIRED")
 
         try:
             job = Job.objects.get(id=job_id)
         except Job.DoesNotExist:
-            return error_response("职位不存在", 404)
+            return error_response("职位不存在", 404, code="SKILL_MATCH_JOB_NOT_FOUND")
 
         user_skills = split_skills(request.user.skills or "")
         job_skills = split_skills(job.skills_required or "")

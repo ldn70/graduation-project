@@ -5,7 +5,7 @@ from django.db.models import Q
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 
-from core.response import success_response
+from core.response import error_response, success_response
 from .models import Job
 from .serializers import JobListSerializer
 from .utils import parse_salary_range_k_month
@@ -20,8 +20,18 @@ class JobSearchView(APIView):
         education = request.GET.get("education", "").strip()
         salary_min = request.GET.get("salary_min")
         salary_max = request.GET.get("salary_max")
-        page = int(request.GET.get("page", 1))
-        per_page = int(request.GET.get("per_page", 10))
+        try:
+            page = int(request.GET.get("page", 1))
+        except (TypeError, ValueError):
+            return error_response("page 参数格式错误", 400, code="JOB_SEARCH_PAGE_INVALID")
+        try:
+            per_page = int(request.GET.get("per_page", 10))
+        except (TypeError, ValueError):
+            return error_response("per_page 参数格式错误", 400, code="JOB_SEARCH_PER_PAGE_INVALID")
+        if page <= 0:
+            return error_response("page 必须大于 0", 400, code="JOB_SEARCH_PAGE_INVALID")
+        if per_page <= 0:
+            return error_response("per_page 必须大于 0", 400, code="JOB_SEARCH_PER_PAGE_INVALID")
 
         if keyword:
             query &= (

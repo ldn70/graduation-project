@@ -14,7 +14,7 @@ class ResumeGenerateView(APIView):
     def post(self, request):
         file_format = (request.data.get("format") or "txt").lower()
         if file_format not in {"txt", "pdf"}:
-            return error_response("仅支持 txt/pdf 格式", 400)
+            return error_response("仅支持 txt/pdf 格式", 400, code="RESUME_FORMAT_UNSUPPORTED")
 
         user = request.user
         content = "\n".join(

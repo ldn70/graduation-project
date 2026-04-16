@@ -1,12 +1,15 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { loadEcharts } from '../lib/echartsLoader'
-import { jobs, onFetchTrends, onSearch, trendForm, trendHint, trendResult } from '../state/dashboardState'
+import { jobs, loading, onFetchTrends, onSearch, requestState, trendForm, trendHint, trendResult } from '../state/dashboardState'
 
 const locationChartRef = ref(null)
 const trendChartRef = ref(null)
 let locationChart = null
 let trendChart = null
+const hasTrendData = computed(
+  () => !!(trendResult.value.historical?.length || trendResult.value.forecast?.length),
+)
 
 const renderLocationChart = async () => {
   if (!locationChartRef.value) return
@@ -105,17 +108,24 @@ onBeforeUnmount(() => {
   <section class="grid">
     <article class="panel">
       <h2>岗位地域分布</h2>
-      <div ref="locationChartRef" class="chart"></div>
+      <div ref="locationChartRef" class="chart" :class="{ 'chart--loading': loading.search }"></div>
     </article>
     <article class="panel">
       <h2>趋势分析</h2>
       <div class="row">
-        <select v-model="trendForm.time_range" data-testid="trend-time-range">
+        <select v-model="trendForm.time_range" data-testid="trend-time-range" :disabled="loading.trends">
           <option value="month">月度</option>
           <option value="quarter">季度</option>
           <option value="year">年度</option>
         </select>
-        <button data-testid="trend-submit" @click="onFetchTrends">刷新趋势</button>
+        <button
+          data-testid="trend-submit"
+          :disabled="loading.trends"
+          :class="{ 'is-loading': loading.trends }"
+          @click="onFetchTrends"
+        >
+          {{ loading.trends ? '刷新中...' : '刷新趋势' }}
+        </button>
       </div>
       <div
         v-if="trendHint"
@@ -126,25 +136,37 @@ onBeforeUnmount(() => {
         <p>{{ trendHint.message }}</p>
         <div class="row">
           <a v-if="trendHint.showLogin" href="/auth" class="ghost-link">去登录</a>
-          <button v-if="trendHint.showRetry" class="ghost-btn" @click="onFetchTrends">重试趋势分析</button>
+          <button v-if="trendHint.showRetry" class="ghost-btn" :disabled="loading.trends" @click="onFetchTrends">
+            重试趋势分析
+          </button>
         </div>
       </div>
-      <p data-testid="trend-backend" class="hint">模型：{{ trendResult.model_info?.backend || '-' }}</p>
-      <p class="hint">粒度：{{ trendResult.time_range || trendForm.time_range }}</p>
-      <p v-if="trendResult.model_info?.trained_at" class="hint">
-        训练时间：{{ trendResult.model_info.trained_at }}
-      </p>
-      <ul v-if="trendResult.forecast?.length" class="jobs compact">
-        <li v-for="item in trendResult.forecast" :key="item.date">
-          <div>
-            <strong>{{ item.date }}</strong>
-          </div>
-          <div>
-            <span>{{ item.lower_bound }} - {{ item.upper_bound }}</span>
-          </div>
-        </li>
-      </ul>
-      <div ref="trendChartRef" class="chart"></div>
+      <div v-if="loading.trends" class="panel-skeleton" data-testid="trend-skeleton">
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line short"></div>
+        <div class="skeleton-block"></div>
+      </div>
+      <template v-else>
+        <p data-testid="trend-backend" class="hint">模型：{{ trendResult.model_info?.backend || '-' }}</p>
+        <p class="hint">粒度：{{ trendResult.time_range || trendForm.time_range }}</p>
+        <p v-if="trendResult.model_info?.trained_at" class="hint">
+          训练时间：{{ trendResult.model_info.trained_at }}
+        </p>
+        <p v-if="requestState.trendsFetched && !hasTrendData && !trendHint" data-testid="trend-empty" class="hint">
+          当前条件下暂无趋势数据，可切换时间粒度或搜索条件后重试。
+        </p>
+        <ul v-if="trendResult.forecast?.length" class="jobs compact">
+          <li v-for="item in trendResult.forecast" :key="item.date">
+            <div>
+              <strong>{{ item.date }}</strong>
+            </div>
+            <div>
+              <span>{{ item.lower_bound }} - {{ item.upper_bound }}</span>
+            </div>
+          </li>
+        </ul>
+      </template>
+      <div ref="trendChartRef" class="chart" :class="{ 'chart--loading': loading.trends }"></div>
     </article>
   </section>
 </template>

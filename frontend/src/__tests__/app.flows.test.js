@@ -5,6 +5,8 @@ import { nextTick } from 'vue'
 import * as api from '../api'
 import { message, resetDashboardState } from '../state/dashboardState'
 import AuthView from '../views/AuthView.vue'
+import RecommendView from '../views/RecommendView.vue'
+import SalaryView from '../views/SalaryView.vue'
 import SearchView from '../views/SearchView.vue'
 import TrendsView from '../views/TrendsView.vue'
 
@@ -176,6 +178,152 @@ describe('App key flows', () => {
 
     expect(wrapper.get('[data-testid="search-action-hint"]').text()).toContain('认证失败')
     expect(wrapper.get('[data-testid="search-action-hint"] a').attributes('href')).toBe('/auth')
+  })
+
+  it('shows loading skeleton and disables submit button while searching', async () => {
+    let resolveSearch
+    vi.mocked(api.searchJobs).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve
+        }),
+    )
+
+    const wrapper = mount(SearchView)
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="search-skeleton"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="search-submit"]').attributes('disabled')).toBeDefined()
+
+    resolveSearch({
+      data: {
+        data: {
+          jobs: [{ id: 2, title: 'Java开发工程师', company: 'B公司', salary: '20-30k', location: '北京' }],
+          total: 1,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="search-skeleton"]').exists()).toBe(false)
+  })
+
+  it('categorizes 429 errors with rate-limit message', async () => {
+    const wrapper = mount(SearchView)
+    await flushPromises()
+
+    vi.mocked(api.searchJobs).mockRejectedValueOnce({
+      response: { status: 429, data: {} },
+    })
+    await wrapper.get('[data-testid="search-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="search-action-hint"]').text()).toContain('请求过于频繁')
+    expect(message.value).toContain('请求过于频繁')
+  })
+
+  it('prefers backend error code mapping for search parameter errors', async () => {
+    const wrapper = mount(SearchView)
+    await flushPromises()
+
+    vi.mocked(api.searchJobs).mockRejectedValueOnce({
+      response: { status: 400, data: { code: 'JOB_SEARCH_PAGE_INVALID' } },
+    })
+    await wrapper.get('[data-testid="search-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="search-action-hint"]').text()).toContain('格式错误')
+    expect(wrapper.get('[data-testid="search-action-hint"]').text()).toContain('page/per_page')
+  })
+
+  it('categorizes missing parameters for salary prediction', async () => {
+    const wrapper = mount(SalaryView)
+    await flushPromises()
+
+    vi.mocked(api.predictSalary).mockRejectedValueOnce({
+      response: { status: 400, data: { message: '缺失 skills 字段' } },
+    })
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('参数缺失')
+    expect(wrapper.text()).toContain('缺失 skills 字段')
+    expect(message.value).toContain('参数缺失')
+  })
+
+  it('categorizes format errors for salary prediction', async () => {
+    const wrapper = mount(SalaryView)
+    await flushPromises()
+
+    vi.mocked(api.predictSalary).mockRejectedValueOnce({
+      response: { status: 400, data: { message: '经验格式不正确' } },
+    })
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('格式错误')
+    expect(wrapper.text()).toContain('经验格式不正确')
+    expect(message.value).toContain('格式错误')
+  })
+
+  it('prefers backend code for login credential errors', async () => {
+    const wrapper = mount(AuthView)
+    await flushPromises()
+
+    vi.mocked(api.login).mockRejectedValueOnce({
+      response: { status: 401, data: { code: 'USER_LOGIN_CREDENTIALS_INVALID' } },
+    })
+    await wrapper.get('[data-testid="login-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(message.value).toContain('认证失败')
+    expect(message.value).not.toContain('权限不足')
+  })
+
+  it('shows empty guidance when recommendations succeed with no data', async () => {
+    const wrapper = mount(RecommendView)
+    await flushPromises()
+
+    vi.mocked(api.fetchRecommendations).mockResolvedValueOnce({
+      data: { data: { recommendations: [] } },
+    })
+    await wrapper.findAll('button')[0].trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="recommend-empty"]').text()).toContain('暂无推荐结果')
+  })
+
+  it('shows empty guidance when salary prediction succeeds with empty payload', async () => {
+    const wrapper = mount(SalaryView)
+    await flushPromises()
+
+    vi.mocked(api.predictSalary).mockResolvedValueOnce({
+      data: { data: {} },
+    })
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="salary-empty"]').text()).toContain('暂无可展示的薪资结果')
+  })
+
+  it('shows empty guidance when trend data is empty but request succeeds', async () => {
+    const wrapper = mount(TrendsView)
+    await flushPromises()
+
+    vi.mocked(api.fetchTrends).mockResolvedValueOnce({
+      data: {
+        data: {
+          historical: [],
+          forecast: [],
+          time_range: 'month',
+          model_info: { backend: 'baseline' },
+        },
+      },
+    })
+    await wrapper.get('[data-testid="trend-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="trend-empty"]').text()).toContain('暂无趋势数据')
   })
 
   it('shows timeout hint and retry action for trends', async () => {

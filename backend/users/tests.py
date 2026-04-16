@@ -28,6 +28,7 @@ class UserApiTests(APITestCase):
         dup_resp = self.client.post("/api/users/register", self.register_payload, format="json")
         self.assertEqual(dup_resp.status_code, 400)
         self.assertFalse(dup_resp.data["success"])
+        self.assertEqual(dup_resp.data.get("code"), "USER_USERNAME_EXISTS")
 
         login_resp = self.client.post(
             "/api/users/login",
@@ -43,6 +44,7 @@ class UserApiTests(APITestCase):
             format="json",
         )
         self.assertEqual(bad_login.status_code, 401)
+        self.assertEqual(bad_login.data.get("code"), "USER_LOGIN_CREDENTIALS_INVALID")
 
         token = login_resp.data["data"]["accessToken"]
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {token}")
@@ -62,3 +64,8 @@ class UserApiTests(APITestCase):
     def test_profile_requires_auth(self):
         resp = self.client.put("/api/users/profile", {"name": "NoAuth"}, format="json")
         self.assertEqual(resp.status_code, 401)
+
+    def test_register_invalid_params_contains_error_code(self):
+        resp = self.client.post("/api/users/register", {"username": "invalid_only"}, format="json")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "USER_REGISTER_INVALID_PARAMS")

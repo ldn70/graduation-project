@@ -52,3 +52,9 @@ class ResumeApiTests(APITestCase):
         self.assertEqual(gen_resp.status_code, 200)
         self.assertEqual(gen_resp.data["data"]["format"], "pdf")
         self.assertTrue(gen_resp.data["data"]["file_url"].endswith(".txt"))
+
+    def test_generate_resume_rejects_unsupported_format_with_code(self):
+        self.client.force_authenticate(user=self.user)
+        gen_resp = self.client.post("/api/resume/generate", {"format": "docx"}, format="json")
+        self.assertEqual(gen_resp.status_code, 400)
+        self.assertEqual(gen_resp.data.get("code"), "RESUME_FORMAT_UNSUPPORTED")
