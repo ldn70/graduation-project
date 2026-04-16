@@ -299,6 +299,36 @@ class AnalysisApiTests(APITestCase):
         self.assertIn("predicted_salary_min", resp.data["data"])
         self.assertIn("predicted_salary_max", resp.data["data"])
 
+    def test_salary_predict_requires_skills_code(self):
+        resp = self.client.post(
+            "/api/salary/predict",
+            {
+                "job_title": "Python开发",
+                "education": "本科",
+                "experience": "3-5年",
+                "skills": [],
+                "city": "上海",
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "SALARY_SKILLS_REQUIRED")
+
+    def test_salary_predict_invalid_skills_format_code(self):
+        resp = self.client.post(
+            "/api/salary/predict",
+            {
+                "job_title": "Python开发",
+                "education": "本科",
+                "experience": "3-5年",
+                "skills": {"python": 1},
+                "city": "上海",
+            },
+            format="json",
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "SALARY_SKILLS_INVALID_FORMAT")
+
     def test_trends_api_with_forecast(self):
         resp = self.client.get(
             "/api/trends/jobs",
@@ -308,3 +338,13 @@ class AnalysisApiTests(APITestCase):
         self.assertIn("historical", resp.data["data"])
         self.assertIn("forecast", resp.data["data"])
         self.assertIn("model_info", resp.data["data"])
+
+    def test_trends_invalid_time_range_code(self):
+        resp = self.client.get("/api/trends/jobs", {"time_range": "weekly"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "TREND_TIME_RANGE_INVALID")
+
+    def test_trends_invalid_forecast_code(self):
+        resp = self.client.get("/api/trends/jobs", {"forecast": "maybe"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "TREND_FORECAST_INVALID")

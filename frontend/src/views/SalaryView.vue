@@ -1,12 +1,18 @@
 <script setup>
 import { computed } from 'vue'
-import { loading, onPredictSalary, requestState, salaryForm, salaryHint, salaryResult } from '../state/dashboardState'
+import { loading, onPredictSalary, requestState, resetSearchFilters, salaryForm, salaryHint, salaryResult } from '../state/dashboardState'
 
 const showSalaryResult = computed(() => {
   const min = Number(salaryResult.value?.predicted_salary_min)
   const max = Number(salaryResult.value?.predicted_salary_max)
   return Number.isFinite(min) && Number.isFinite(max)
 })
+
+const showSalaryEmpty = computed(() => requestState.value.salaryPredicted && !showSalaryResult.value && !salaryHint.value)
+
+const onResetSearchFilters = () => {
+  resetSearchFilters()
+}
 </script>
 
 <template>
@@ -35,8 +41,12 @@ const showSalaryResult = computed(() => {
     <p v-else-if="showSalaryResult" class="hint">
       结果：{{ salaryResult.predicted_salary_min }} - {{ salaryResult.predicted_salary_max }} {{ salaryResult.unit }}
     </p>
-    <p v-else-if="requestState.salaryPredicted && !salaryHint" data-testid="salary-empty" class="hint">
+    <p v-else-if="showSalaryEmpty" data-testid="salary-empty" class="hint">
       暂无可展示的薪资结果，请检查输入条件后重试。
     </p>
+    <div v-if="showSalaryEmpty" class="row" data-testid="salary-empty-actions">
+      <a href="/search" class="ghost-link" data-testid="salary-empty-goto-search">去搜索页</a>
+      <button class="ghost-btn" data-testid="salary-empty-reset-filters" @click="onResetSearchFilters">重置筛选</button>
+    </div>
   </section>
 </template>

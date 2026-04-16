@@ -83,6 +83,10 @@ class ProfileView(APIView):
 
 
 class DeleteAccountView(APIView):
+    permission_classes = [AllowAny]
+
     def delete(self, request):
+        if not request.user or not request.user.is_authenticated:
+            return error_response("请先登录后再注销账户", 401, code="USER_DELETE_AUTH_REQUIRED")
         request.user.delete()
         return success_response({}, "账户注销成功")

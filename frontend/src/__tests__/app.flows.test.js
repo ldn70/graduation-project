@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 
 import * as api from '../api'
-import { message, resetDashboardState } from '../state/dashboardState'
+import { message, resetDashboardState, searchForm } from '../state/dashboardState'
 import AuthView from '../views/AuthView.vue'
 import RecommendView from '../views/RecommendView.vue'
 import SalaryView from '../views/SalaryView.vue'
@@ -266,6 +266,21 @@ describe('App key flows', () => {
     expect(message.value).toContain('格式错误')
   })
 
+  it('prefers backend code mapping for salary missing skills', async () => {
+    const wrapper = mount(SalaryView)
+    await flushPromises()
+
+    vi.mocked(api.predictSalary).mockRejectedValueOnce({
+      response: { status: 400, data: { code: 'SALARY_SKILLS_REQUIRED' } },
+    })
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('参数缺失')
+    expect(wrapper.text()).toContain('至少填写 1 项技能')
+    expect(message.value).toContain('参数缺失')
+  })
+
   it('prefers backend code for login credential errors', async () => {
     const wrapper = mount(AuthView)
     await flushPromises()
@@ -283,6 +298,8 @@ describe('App key flows', () => {
   it('shows empty guidance when recommendations succeed with no data', async () => {
     const wrapper = mount(RecommendView)
     await flushPromises()
+    searchForm.value.keyword = 'Java'
+    searchForm.value.education = '本科'
 
     vi.mocked(api.fetchRecommendations).mockResolvedValueOnce({
       data: { data: { recommendations: [] } },
@@ -291,6 +308,11 @@ describe('App key flows', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="recommend-empty"]').text()).toContain('暂无推荐结果')
+    expect(wrapper.get('[data-testid="recommend-empty-goto-search"]').attributes('href')).toBe('/search')
+
+    await wrapper.get('[data-testid="recommend-empty-reset-filters"]').trigger('click')
+    expect(searchForm.value).toMatchObject({ keyword: '', education: '', page: 1, per_page: 10 })
+    expect(message.value).toContain('已重置搜索筛选条件')
   })
 
   it('shows empty guidance when salary prediction succeeds with empty payload', async () => {
@@ -304,6 +326,8 @@ describe('App key flows', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="salary-empty"]').text()).toContain('暂无可展示的薪资结果')
+    expect(wrapper.get('[data-testid="salary-empty-actions"]').text()).toContain('去搜索页')
+    expect(wrapper.get('[data-testid="salary-empty-actions"]').text()).toContain('重置筛选')
   })
 
   it('shows empty guidance when trend data is empty but request succeeds', async () => {
@@ -324,6 +348,8 @@ describe('App key flows', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="trend-empty"]').text()).toContain('暂无趋势数据')
+    expect(wrapper.get('[data-testid="trend-empty-actions"]').text()).toContain('去搜索页')
+    expect(wrapper.get('[data-testid="trend-empty-actions"]').text()).toContain('重置筛选')
   })
 
   it('shows timeout hint and retry action for trends', async () => {
@@ -339,5 +365,20 @@ describe('App key flows', () => {
 
     expect(wrapper.get('[data-testid="trend-action-hint"]').text()).toContain('请求超时')
     expect(wrapper.get('[data-testid="trend-action-hint"]').text()).toContain('重试趋势分析')
+  })
+
+  it('prefers backend code mapping for trend time range errors', async () => {
+    const wrapper = mount(TrendsView)
+    await flushPromises()
+
+    vi.mocked(api.fetchTrends).mockRejectedValueOnce({
+      response: { status: 400, data: { code: 'TREND_TIME_RANGE_INVALID' } },
+    })
+    await wrapper.get('[data-testid="trend-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="trend-action-hint"]').text()).toContain('格式错误')
+    expect(wrapper.get('[data-testid="trend-action-hint"]').text()).toContain('month/quarter/year')
+    expect(message.value).toContain('格式错误')
   })
 })

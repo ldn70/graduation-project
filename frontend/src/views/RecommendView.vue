@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import {
   loading,
   onFetchRecommendations,
@@ -7,10 +7,22 @@ import {
   onFetchSkillMatch,
   recommendations,
   recommendHint,
+  resetSearchFilters,
   requestState,
   skillDemand,
   skillMatch,
 } from '../state/dashboardState'
+
+const showRecommendEmpty = computed(
+  () => requestState.value.recommendationsFetched && !loading.value.recommendations && !recommendations.value.length && !recommendHint.value,
+)
+const showSkillDemandEmpty = computed(
+  () => requestState.value.skillDemandFetched && !loading.value.skillDemand && !skillDemand.value.length && !recommendHint.value,
+)
+
+const onResetSearchFilters = () => {
+  resetSearchFilters()
+}
 
 onMounted(async () => {
   if (!skillDemand.value.length) {
@@ -58,12 +70,16 @@ onMounted(async () => {
         </li>
       </ul>
       <p
-        v-if="requestState.recommendationsFetched && !loading.recommendations && !recommendations.length && !recommendHint"
+        v-if="showRecommendEmpty"
         data-testid="recommend-empty"
         class="hint"
       >
         暂无推荐结果，可先完善技能信息或调整搜索条件后重试。
       </p>
+      <div v-if="showRecommendEmpty" class="row" data-testid="recommend-empty-actions">
+        <a href="/search" class="ghost-link" data-testid="recommend-empty-goto-search">去搜索页</a>
+        <button class="ghost-btn" data-testid="recommend-empty-reset-filters" @click="onResetSearchFilters">重置筛选</button>
+      </div>
     </article>
 
     <article class="panel">
@@ -89,12 +105,16 @@ onMounted(async () => {
         </li>
       </ul>
       <p
-        v-if="requestState.skillDemandFetched && !loading.skillDemand && !skillDemand.length && !recommendHint"
+        v-if="showSkillDemandEmpty"
         data-testid="skill-demand-empty"
         class="hint"
       >
         暂无技能需求数据，可切换搜索条件后重新分析。
       </p>
+      <div v-if="showSkillDemandEmpty" class="row" data-testid="skill-demand-empty-actions">
+        <a href="/search" class="ghost-link" data-testid="skill-demand-empty-goto-search">去搜索页</a>
+        <button class="ghost-btn" data-testid="skill-demand-empty-reset-filters" @click="onResetSearchFilters">重置筛选</button>
+      </div>
       <div class="row">
         <button :disabled="loading.skillMatch" :class="{ 'is-loading': loading.skillMatch }" @click="onFetchSkillMatch">
           {{ loading.skillMatch ? '匹配中...' : '技能匹配' }}

@@ -186,6 +186,17 @@ class SalaryPredictView(APIView):
             "city": request.data.get("city", ""),
             "industry": request.data.get("industry", ""),
         }
+        skills_raw = payload.get("skills", [])
+        if isinstance(skills_raw, str):
+            skills = [x.strip() for x in re.split(r"[,，/|;\s]+", skills_raw) if x.strip()]
+        elif isinstance(skills_raw, list):
+            skills = [str(x).strip() for x in skills_raw if str(x).strip()]
+        else:
+            return error_response("skills 参数格式错误", 400, code="SALARY_SKILLS_INVALID_FORMAT")
+        if not skills:
+            return error_response("至少提供 1 项技能", 400, code="SALARY_SKILLS_REQUIRED")
+        payload["skills"] = skills
+
         try:
             result = predict_salary_from_payload(payload)
             return success_response(result, "预测成功（XGBoost + SHAP）")
@@ -199,8 +210,6 @@ class SalaryPredictView(APIView):
         education = str(payload.get("education", "本科"))
         experience = parse_experience_years(payload.get("experience"))
         skills = payload.get("skills", [])
-        if isinstance(skills, str):
-            skills = [x.strip() for x in re.split(r"[,，/|;\s]+", skills) if x.strip()]
         city = str(payload.get("city", ""))
 
         edu_factor = {"大专": 0.9, "本科": 1.0, "硕士": 1.15, "博士": 1.3}.get(education, 1.0)
@@ -245,7 +254,16 @@ class JobTrendView(APIView):
         industry = request.GET.get("industry", "").strip()
         job_title = request.GET.get("job_title", "").strip()
         time_range = request.GET.get("time_range", "month").strip().lower()
-        include_forecast = request.GET.get("forecast", "false").lower() == "true"
+        if time_range not in {"month", "quarter", "year"}:
+            return error_response(
+                "time_range 仅支持 month/quarter/year",
+                400,
+                code="TREND_TIME_RANGE_INVALID",
+            )
+        forecast_flag = request.GET.get("forecast", "false").strip().lower()
+        if forecast_flag not in {"true", "false"}:
+            return error_response("forecast 仅支持 true/false", 400, code="TREND_FORECAST_INVALID")
+        include_forecast = forecast_flag == "true"
 
         query = Q()
         if industry:

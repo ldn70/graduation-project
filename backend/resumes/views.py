@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from django.conf import settings
-from django.http import FileResponse, Http404
+from django.http import FileResponse
 from rest_framework.views import APIView
 
 from core.response import error_response, success_response
@@ -47,7 +47,12 @@ class ResumeDownloadView(APIView):
 
     def get(self, request, filename):
         safe_name = Path(filename).name
+        if safe_name != filename:
+            return error_response("文件名不合法", 400, code="RESUME_FILE_NAME_INVALID")
         filepath = Path(settings.MEDIA_ROOT) / "resumes" / safe_name
         if not filepath.exists() or not filepath.is_file():
-            raise Http404("文件不存在")
-        return FileResponse(open(filepath, "rb"), as_attachment=True, filename=safe_name)
+            return error_response("文件不存在", 404, code="RESUME_FILE_NOT_FOUND")
+        try:
+            return FileResponse(open(filepath, "rb"), as_attachment=True, filename=safe_name)
+        except OSError:
+            return error_response("文件读取失败", 500, code="RESUME_FILE_READ_FAILED")

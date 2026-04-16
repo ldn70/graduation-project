@@ -1,5 +1,6 @@
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from rest_framework.test import APITestCase
@@ -58,3 +59,18 @@ class ResumeApiTests(APITestCase):
         gen_resp = self.client.post("/api/resume/generate", {"format": "docx"}, format="json")
         self.assertEqual(gen_resp.status_code, 400)
         self.assertEqual(gen_resp.data.get("code"), "RESUME_FORMAT_UNSUPPORTED")
+
+    def test_download_missing_file_returns_code(self):
+        resp = self.client.get("/download/not-exists-resume.txt")
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(resp.data.get("code"), "RESUME_FILE_NOT_FOUND")
+
+    def test_download_read_error_returns_code(self):
+        self.client.force_authenticate(user=self.user)
+        gen_resp = self.client.post("/api/resume/generate", {"format": "txt"}, format="json")
+        file_url = gen_resp.data["data"]["file_url"]
+
+        with patch("resumes.views.open", side_effect=OSError("read failed")):
+            resp = self.client.get(file_url)
+        self.assertEqual(resp.status_code, 500)
+        self.assertEqual(resp.data.get("code"), "RESUME_FILE_READ_FAILED")

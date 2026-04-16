@@ -120,10 +120,30 @@ const ERROR_CODE_HINTS = {
     prefix: '参数错误',
     message: () => '资料格式不正确，请检查后重试。',
   },
+  USER_DELETE_AUTH_REQUIRED: {
+    level: 'warning',
+    prefix: '认证失败',
+    message: () => '请先登录后再注销账户。',
+  },
   RESUME_FORMAT_UNSUPPORTED: {
     level: 'warning',
     prefix: '格式错误',
     message: () => '仅支持 txt/pdf 格式，请调整后重试。',
+  },
+  RESUME_FILE_NAME_INVALID: {
+    level: 'warning',
+    prefix: '参数错误',
+    message: () => '下载文件名不合法，请重新生成简历后再试。',
+  },
+  RESUME_FILE_NOT_FOUND: {
+    level: 'warning',
+    prefix: '资源不存在',
+    message: () => '简历文件不存在或已过期，请重新生成后再下载。',
+  },
+  RESUME_FILE_READ_FAILED: {
+    level: 'error',
+    prefix: '服务异常',
+    message: () => '简历文件读取失败，请稍后重试。',
   },
   JOB_SEARCH_PAGE_INVALID: {
     level: 'warning',
@@ -154,6 +174,26 @@ const ERROR_CODE_HINTS = {
     level: 'warning',
     prefix: '资源不存在',
     message: () => '目标岗位不存在，请重新搜索后再试。',
+  },
+  SALARY_SKILLS_REQUIRED: {
+    level: 'warning',
+    prefix: '参数缺失',
+    message: () => '请至少填写 1 项技能后再进行薪资预测。',
+  },
+  SALARY_SKILLS_INVALID_FORMAT: {
+    level: 'warning',
+    prefix: '格式错误',
+    message: () => '技能参数格式错误，请使用字符串或数组。',
+  },
+  TREND_TIME_RANGE_INVALID: {
+    level: 'warning',
+    prefix: '格式错误',
+    message: () => 'time_range 仅支持 month/quarter/year。',
+  },
+  TREND_FORECAST_INVALID: {
+    level: 'warning',
+    prefix: '格式错误',
+    message: () => 'forecast 仅支持 true/false。',
   },
 }
 
@@ -508,6 +548,14 @@ export const onFetchTrends = async () => {
   } finally {
     setLoading('trends', false)
   }
+}
+
+export const resetSearchFilters = () => {
+  searchForm.value = createSearchForm()
+  jobs.value = []
+  total.value = 0
+  searchHint.value = null
+  toast('已重置搜索筛选条件，请重新查询')
 }
 
 export const resetDashboardState = () => {

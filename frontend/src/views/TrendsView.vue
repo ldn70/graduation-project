@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { loadEcharts } from '../lib/echartsLoader'
-import { jobs, loading, onFetchTrends, onSearch, requestState, trendForm, trendHint, trendResult } from '../state/dashboardState'
+import { jobs, loading, onFetchTrends, onSearch, requestState, resetSearchFilters, trendForm, trendHint, trendResult } from '../state/dashboardState'
 
 const locationChartRef = ref(null)
 const trendChartRef = ref(null)
@@ -10,6 +10,11 @@ let trendChart = null
 const hasTrendData = computed(
   () => !!(trendResult.value.historical?.length || trendResult.value.forecast?.length),
 )
+const showTrendEmpty = computed(() => requestState.value.trendsFetched && !loading.value.trends && !hasTrendData.value && !trendHint.value)
+
+const onResetSearchFilters = () => {
+  resetSearchFilters()
+}
 
 const renderLocationChart = async () => {
   if (!locationChartRef.value) return
@@ -152,9 +157,13 @@ onBeforeUnmount(() => {
         <p v-if="trendResult.model_info?.trained_at" class="hint">
           训练时间：{{ trendResult.model_info.trained_at }}
         </p>
-        <p v-if="requestState.trendsFetched && !hasTrendData && !trendHint" data-testid="trend-empty" class="hint">
+        <p v-if="showTrendEmpty" data-testid="trend-empty" class="hint">
           当前条件下暂无趋势数据，可切换时间粒度或搜索条件后重试。
         </p>
+        <div v-if="showTrendEmpty" class="row" data-testid="trend-empty-actions">
+          <a href="/search" class="ghost-link" data-testid="trend-empty-goto-search">去搜索页</a>
+          <button class="ghost-btn" data-testid="trend-empty-reset-filters" @click="onResetSearchFilters">重置筛选</button>
+        </div>
         <ul v-if="trendResult.forecast?.length" class="jobs compact">
           <li v-for="item in trendResult.forecast" :key="item.date">
             <div>

@@ -65,6 +65,11 @@ class UserApiTests(APITestCase):
         resp = self.client.put("/api/users/profile", {"name": "NoAuth"}, format="json")
         self.assertEqual(resp.status_code, 401)
 
+    def test_delete_requires_auth_with_error_code(self):
+        resp = self.client.delete("/api/users/delete")
+        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(resp.data.get("code"), "USER_DELETE_AUTH_REQUIRED")
+
     def test_register_invalid_params_contains_error_code(self):
         resp = self.client.post("/api/users/register", {"username": "invalid_only"}, format="json")
         self.assertEqual(resp.status_code, 400)
