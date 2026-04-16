@@ -1,0 +1,4 @@
+title,company,salary,education,experience,skills_required,description,location,industry,publish_time,job_url
+Python开发工程师,星辰科技,15-25K,本科,3-5年,"Python,Django,MySQL,RESTful",负责后端服务开发与优化,北京,互联网,2026-04-01 10:00:00,https://example.com/job/101
+数据分析师,远望数据,12-20K,本科,1-3年,"SQL,Python,Tableau",负责数据分析与报表建设,上海,互联网,2026-04-03 09:30:00,https://example.com/job/102
+Java开发工程师,凌云软件,14-22K,本科,3-5年,"Java,Spring,MySQL,Redis",负责核心服务研发,成都,软件,2026-04-05 14:15:00,https://example.com/job/103
