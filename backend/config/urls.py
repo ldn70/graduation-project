@@ -26,3 +26,8 @@ urlpatterns = [
     path("api/", include("analysis.urls")),
     path("download/<str:filename>", ResumeDownloadView.as_view(), name="resume-download"),
 ]
+
+handler400 = "core.http_error_handlers.bad_request_handler"
+handler403 = "core.http_error_handlers.permission_denied_handler"
+handler404 = "core.http_error_handlers.not_found_handler"
+handler500 = "core.http_error_handlers.server_error_handler"

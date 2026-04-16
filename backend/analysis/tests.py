@@ -251,6 +251,7 @@ class AnalysisApiTests(APITestCase):
     def test_recommend_requires_auth(self):
         resp = self.client.get("/api/recommend/jobs", {"limit": 5})
         self.assertEqual(resp.status_code, 401)
+        self.assertEqual(resp.data.get("code"), "COMMON_AUTH_REQUIRED")
 
     def test_recommend_with_auth(self):
         self.client.force_authenticate(user=self.user)

@@ -22,6 +22,8 @@ from .trend_model import (
 
 
 class RecommendJobsView(APIView):
+    throttle_scope = "analysis_recommend"
+
     def get(self, request):
         try:
             limit = int(request.GET.get("limit", 10))
@@ -116,6 +118,7 @@ class RecommendJobsView(APIView):
 
 class SkillDemandView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = "analysis_skill_demand"
 
     def get(self, request):
         industry = request.GET.get("industry", "").strip()
@@ -148,6 +151,8 @@ class SkillDemandView(APIView):
 
 
 class SkillMatchView(APIView):
+    throttle_scope = "analysis_skill_match"
+
     def get(self, request):
         job_id = request.GET.get("job_id")
         if not job_id:
@@ -176,6 +181,7 @@ class SkillMatchView(APIView):
 
 class SalaryPredictView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = "analysis_salary_predict"
 
     def post(self, request):
         payload = {
@@ -249,6 +255,7 @@ class SalaryPredictView(APIView):
 
 class JobTrendView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = "analysis_trends"
 
     def get(self, request):
         industry = request.GET.get("industry", "").strip()

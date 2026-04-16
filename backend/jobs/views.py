@@ -13,6 +13,7 @@ from .utils import parse_salary_range_k_month
 
 class JobSearchView(APIView):
     permission_classes = [AllowAny]
+    throttle_scope = "jobs_search"
 
     def get(self, request):
         query = Q()

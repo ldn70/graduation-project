@@ -3,6 +3,8 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
+from .models import AuthSecurityLog
+
 User = get_user_model()
 
 
@@ -47,3 +49,9 @@ class UserInfoSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ("id", "username", "name", "phone", "education", "skills", "experience", "created_at", "updated_at")
+
+
+class AuthSecurityLogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AuthSecurityLog
+        fields = ("id", "event_type", "username", "client_ip", "detail", "created_at")

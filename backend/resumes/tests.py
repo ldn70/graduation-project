@@ -30,6 +30,7 @@ class ResumeApiTests(APITestCase):
     def test_generate_resume_requires_auth(self):
         resp = self.client.post("/api/resume/generate", {"format": "txt"}, format="json")
         self.assertEqual(resp.status_code, 401)
+        self.assertEqual(resp.data.get("code"), "COMMON_AUTH_REQUIRED")
 
     def test_generate_and_download_resume(self):
         self.client.force_authenticate(user=self.user)

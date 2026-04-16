@@ -115,6 +115,12 @@ const ERROR_CODE_HINTS = {
     message: () => '用户名或密码错误，请核对后重试。',
     showLogin: false,
   },
+  USER_LOGIN_TEMP_LOCKED: {
+    level: 'warning',
+    prefix: '登录受限',
+    message: () => '登录尝试过于频繁，请稍后再试。',
+    showLogin: false,
+  },
   USER_PROFILE_INVALID_PARAMS: {
     level: 'warning',
     prefix: '参数错误',
@@ -124,6 +130,38 @@ const ERROR_CODE_HINTS = {
     level: 'warning',
     prefix: '认证失败',
     message: () => '请先登录后再注销账户。',
+  },
+  COMMON_AUTH_REQUIRED: {
+    level: 'warning',
+    prefix: '认证失败',
+    message: () => '请先登录后再继续操作。',
+    showLogin: true,
+  },
+  COMMON_AUTH_INVALID: {
+    level: 'warning',
+    prefix: '认证失败',
+    message: () => '登录凭证无效或已过期，请重新登录后重试。',
+    showLogin: true,
+  },
+  COMMON_PERMISSION_DENIED: {
+    level: 'warning',
+    prefix: '权限不足',
+    message: () => '当前账号无权限访问该资源，请切换账号或联系管理员。',
+  },
+  COMMON_RESOURCE_NOT_FOUND: {
+    level: 'warning',
+    prefix: '资源不存在',
+    message: () => '请求的资源不存在，请检查路径或查询条件后重试。',
+  },
+  COMMON_TOO_MANY_REQUESTS: {
+    level: 'warning',
+    prefix: '频率限制',
+    message: () => '请求过于频繁，请稍后再试。',
+  },
+  COMMON_INTERNAL_SERVER_ERROR: {
+    level: 'error',
+    prefix: '服务异常',
+    message: () => '服务内部异常，请稍后重试。',
   },
   RESUME_FORMAT_UNSUPPORTED: {
     level: 'warning',

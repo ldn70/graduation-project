@@ -11,6 +11,8 @@ from core.response import error_response, success_response
 
 
 class ResumeGenerateView(APIView):
+    throttle_scope = "resume_generate"
+
     def post(self, request):
         file_format = (request.data.get("format") or "txt").lower()
         if file_format not in {"txt", "pdf"}:
@@ -44,6 +46,7 @@ class ResumeGenerateView(APIView):
 class ResumeDownloadView(APIView):
     authentication_classes = []
     permission_classes = []
+    throttle_scope = "resume_download"
 
     def get(self, request, filename):
         safe_name = Path(filename).name

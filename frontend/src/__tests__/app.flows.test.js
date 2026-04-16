@@ -222,6 +222,20 @@ describe('App key flows', () => {
     expect(message.value).toContain('请求过于频繁')
   })
 
+  it('prefers backend code mapping for COMMON_TOO_MANY_REQUESTS', async () => {
+    const wrapper = mount(SearchView)
+    await flushPromises()
+
+    vi.mocked(api.searchJobs).mockRejectedValueOnce({
+      response: { status: 429, data: { code: 'COMMON_TOO_MANY_REQUESTS' } },
+    })
+    await wrapper.get('[data-testid="search-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="search-action-hint"]').text()).toContain('频率限制')
+    expect(wrapper.get('[data-testid="search-action-hint"]').text()).toContain('请求过于频繁')
+  })
+
   it('prefers backend error code mapping for search parameter errors', async () => {
     const wrapper = mount(SearchView)
     await flushPromises()
@@ -293,6 +307,35 @@ describe('App key flows', () => {
 
     expect(message.value).toContain('认证失败')
     expect(message.value).not.toContain('权限不足')
+  })
+
+  it('prefers backend code for login temp lock errors', async () => {
+    const wrapper = mount(AuthView)
+    await flushPromises()
+
+    vi.mocked(api.login).mockRejectedValueOnce({
+      response: { status: 429, data: { code: 'USER_LOGIN_TEMP_LOCKED' } },
+    })
+    await wrapper.get('[data-testid="login-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(message.value).toContain('登录受限')
+    expect(message.value).toContain('登录尝试过于频繁')
+  })
+
+  it('uses auth guidance for COMMON_AUTH_REQUIRED code', async () => {
+    const wrapper = mount(SearchView)
+    await flushPromises()
+
+    vi.mocked(api.searchJobs).mockRejectedValueOnce({
+      response: { status: 401, data: { code: 'COMMON_AUTH_REQUIRED' } },
+    })
+    await wrapper.get('[data-testid="search-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="search-action-hint"]').text()).toContain('认证失败')
+    expect(wrapper.get('[data-testid="search-action-hint"]').text()).toContain('请先登录')
+    expect(wrapper.get('[data-testid="search-action-hint"] a').attributes('href')).toBe('/auth')
   })
 
   it('shows empty guidance when recommendations succeed with no data', async () => {

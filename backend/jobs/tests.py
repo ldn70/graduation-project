@@ -1,6 +1,9 @@
 from django.test import TestCase
+from django.conf import settings as django_settings
+from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APITestCase
+from unittest.mock import patch
 
 from .models import Job
 from .utils import parse_experience_years, parse_salary_range_k_month, split_skills
@@ -80,3 +83,17 @@ class JobSearchApiTests(APITestCase):
         resp = self.client.get("/api/jobs/search", {"page": 1, "per_page": 0})
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.data.get("code"), "JOB_SEARCH_PER_PAGE_INVALID")
+
+    def test_search_throttled_returns_common_code(self):
+        throttle_rates = dict(django_settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_RATES", {}))
+        throttle_rates.update({"jobs_search": "1/min", "anon": "500/min", "user": "500/min"})
+
+        with patch("rest_framework.throttling.SimpleRateThrottle.THROTTLE_RATES", throttle_rates):
+            cache.clear()
+            first = self.client.get("/api/jobs/search", {"keyword": "Python"})
+            second = self.client.get("/api/jobs/search", {"keyword": "Python"})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.data.get("code"), "COMMON_TOO_MANY_REQUESTS")
+        self.assertIn("retry_after", second.data.get("data", {}))

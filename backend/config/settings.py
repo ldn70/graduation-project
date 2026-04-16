@@ -121,6 +121,30 @@ CORS_ALLOWED_ORIGINS = [
 
 AUTH_USER_MODEL = "users.User"
 
+def _env_rate(name, default):
+    value = os.getenv(name, default)
+    return value.strip() if isinstance(value, str) else default
+
+
+def _env_int(name, default):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+AUTH_LOGIN_FAIL_LIMIT_USERNAME = _env_int("AUTH_LOGIN_FAIL_LIMIT_USERNAME", 5)
+AUTH_LOGIN_FAIL_LIMIT_IP = _env_int("AUTH_LOGIN_FAIL_LIMIT_IP", 20)
+AUTH_LOGIN_LOCK_SECONDS = _env_int("AUTH_LOGIN_LOCK_SECONDS", 600)
+AUTH_LOGIN_FAILURE_WINDOW_SECONDS = _env_int(
+    "AUTH_LOGIN_FAILURE_WINDOW_SECONDS",
+    AUTH_LOGIN_LOCK_SECONDS,
+)
+
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -128,6 +152,27 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": _env_rate("DRF_THROTTLE_ANON_RATE", "120/min"),
+        "user": _env_rate("DRF_THROTTLE_USER_RATE", "300/min"),
+        "auth_register": _env_rate("DRF_THROTTLE_AUTH_REGISTER_RATE", "10/min"),
+        "auth_login": _env_rate("DRF_THROTTLE_AUTH_LOGIN_RATE", "20/min"),
+        "jobs_search": _env_rate("DRF_THROTTLE_JOBS_SEARCH_RATE", "180/min"),
+        "analysis_recommend": _env_rate("DRF_THROTTLE_ANALYSIS_RECOMMEND_RATE", "120/min"),
+        "analysis_skill_demand": _env_rate("DRF_THROTTLE_ANALYSIS_SKILL_DEMAND_RATE", "150/min"),
+        "analysis_skill_match": _env_rate("DRF_THROTTLE_ANALYSIS_SKILL_MATCH_RATE", "120/min"),
+        "analysis_salary_predict": _env_rate("DRF_THROTTLE_ANALYSIS_SALARY_PREDICT_RATE", "90/min"),
+        "analysis_trends": _env_rate("DRF_THROTTLE_ANALYSIS_TRENDS_RATE", "120/min"),
+        "resume_generate": _env_rate("DRF_THROTTLE_RESUME_GENERATE_RATE", "30/min"),
+        "resume_download": _env_rate("DRF_THROTTLE_RESUME_DOWNLOAD_RATE", "180/min"),
+        "auth_security_logs": _env_rate("DRF_THROTTLE_AUTH_SECURITY_LOGS_RATE", "60/min"),
+    },
+    "EXCEPTION_HANDLER": "core.exceptions.api_exception_handler",
 }
 
 SIMPLE_JWT = {

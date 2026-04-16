@@ -1,11 +1,17 @@
 from django.contrib.auth import get_user_model
+from django.conf import settings as django_settings
+from django.core.cache import cache
 from rest_framework.test import APITestCase
+from unittest.mock import patch
+
+from .models import AuthSecurityLog
 
 User = get_user_model()
 
 
 class UserApiTests(APITestCase):
     def setUp(self):
+        cache.clear()
         self.register_payload = {
             "username": "api_user_1",
             "password": "12345678",
@@ -64,6 +70,7 @@ class UserApiTests(APITestCase):
     def test_profile_requires_auth(self):
         resp = self.client.put("/api/users/profile", {"name": "NoAuth"}, format="json")
         self.assertEqual(resp.status_code, 401)
+        self.assertEqual(resp.data.get("code"), "COMMON_AUTH_REQUIRED")
 
     def test_delete_requires_auth_with_error_code(self):
         resp = self.client.delete("/api/users/delete")
@@ -74,3 +81,129 @@ class UserApiTests(APITestCase):
         resp = self.client.post("/api/users/register", {"username": "invalid_only"}, format="json")
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.data.get("code"), "USER_REGISTER_INVALID_PARAMS")
+
+    def test_login_throttled_returns_common_code(self):
+        User.objects.create_user(
+            username="throttle_login_user",
+            password="12345678",
+            name="限流用户",
+        )
+        throttle_rates = dict(django_settings.REST_FRAMEWORK.get("DEFAULT_THROTTLE_RATES", {}))
+        throttle_rates.update({"auth_login": "1/min", "anon": "500/min", "user": "500/min"})
+        with patch("rest_framework.throttling.SimpleRateThrottle.THROTTLE_RATES", throttle_rates):
+            cache.clear()
+            first = self.client.post(
+                "/api/users/login",
+                {"username": "throttle_login_user", "password": "12345678"},
+                format="json",
+            )
+            second = self.client.post(
+                "/api/users/login",
+                {"username": "throttle_login_user", "password": "12345678"},
+                format="json",
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.data.get("code"), "COMMON_TOO_MANY_REQUESTS")
+        self.assertIn("retry_after", second.data.get("data", {}))
+
+    def test_login_temp_lock_after_repeated_failures(self):
+        User.objects.create_user(
+            username="lock_user",
+            password="12345678",
+            name="封禁测试用户",
+        )
+        rest_framework_settings = dict(django_settings.REST_FRAMEWORK)
+        throttle_rates = dict(rest_framework_settings.get("DEFAULT_THROTTLE_RATES", {}))
+        throttle_rates.update({"auth_login": "500/min", "anon": "500/min", "user": "500/min"})
+        rest_framework_settings["DEFAULT_THROTTLE_RATES"] = throttle_rates
+
+        with self.settings(
+            REST_FRAMEWORK=rest_framework_settings,
+            AUTH_LOGIN_FAIL_LIMIT_USERNAME=2,
+            AUTH_LOGIN_FAIL_LIMIT_IP=100,
+            AUTH_LOGIN_LOCK_SECONDS=120,
+            AUTH_LOGIN_FAILURE_WINDOW_SECONDS=120,
+        ):
+            with patch("rest_framework.throttling.SimpleRateThrottle.THROTTLE_RATES", throttle_rates):
+                cache.clear()
+                first_fail = self.client.post(
+                    "/api/users/login",
+                    {"username": "lock_user", "password": "wrong-password"},
+                    format="json",
+                )
+                second_fail = self.client.post(
+                    "/api/users/login",
+                    {"username": "lock_user", "password": "wrong-password"},
+                    format="json",
+                )
+                locked_with_right_password = self.client.post(
+                    "/api/users/login",
+                    {"username": "lock_user", "password": "12345678"},
+                    format="json",
+                )
+
+        self.assertEqual(first_fail.status_code, 401)
+        self.assertEqual(first_fail.data.get("code"), "USER_LOGIN_CREDENTIALS_INVALID")
+        self.assertEqual(second_fail.status_code, 429)
+        self.assertEqual(second_fail.data.get("code"), "USER_LOGIN_TEMP_LOCKED")
+        self.assertIn("retry_after", second_fail.data.get("data", {}))
+        self.assertEqual(locked_with_right_password.status_code, 429)
+        self.assertEqual(locked_with_right_password.data.get("code"), "USER_LOGIN_TEMP_LOCKED")
+        event_types = list(
+            AuthSecurityLog.objects.filter(username="lock_user")
+            .order_by("id")
+            .values_list("event_type", flat=True)
+        )
+        self.assertEqual(
+            event_types,
+            [
+                AuthSecurityLog.EVENT_LOGIN_FAILED,
+                AuthSecurityLog.EVENT_LOGIN_LOCK_TRIGGERED,
+                AuthSecurityLog.EVENT_LOGIN_LOCK_BLOCKED,
+            ],
+        )
+
+    def test_security_logs_requires_auth(self):
+        resp = self.client.get("/api/users/security-logs")
+        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(resp.data.get("code"), "COMMON_AUTH_REQUIRED")
+
+    def test_security_logs_query_by_username_and_ip(self):
+        viewer = User.objects.create_user(username="log_viewer", password="12345678")
+        AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_FAILED,
+            detail={"user_fail_count": 1},
+        )
+        AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="10.0.0.8",
+            event_type=AuthSecurityLog.EVENT_LOGIN_SUCCESS,
+            detail={},
+        )
+        AuthSecurityLog.objects.create(
+            username="bob",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_LOCK_TRIGGERED,
+            detail={"retry_after": 120},
+        )
+
+        self.client.force_authenticate(user=viewer)
+        by_username = self.client.get("/api/users/security-logs", {"username": "alice"})
+        self.assertEqual(by_username.status_code, 200)
+        self.assertEqual(by_username.data["data"]["total"], 2)
+
+        by_ip = self.client.get("/api/users/security-logs", {"client_ip": "127.0.0.1"})
+        self.assertEqual(by_ip.status_code, 200)
+        self.assertEqual(by_ip.data["data"]["total"], 2)
+        self.assertTrue(all(item["client_ip"] == "127.0.0.1" for item in by_ip.data["data"]["logs"]))
+
+    def test_security_logs_invalid_pagination_code(self):
+        viewer = User.objects.create_user(username="pagination_viewer", password="12345678")
+        self.client.force_authenticate(user=viewer)
+        resp = self.client.get("/api/users/security-logs", {"page": "bad"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "USER_SECURITY_LOG_PAGE_INVALID")
