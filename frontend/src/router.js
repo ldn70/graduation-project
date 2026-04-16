@@ -22,6 +22,10 @@ export const routes = [
     path: '/trends',
     component: () => import('./views/TrendsView.vue'),
   },
+  {
+    path: '/security-logs',
+    component: () => import('./views/SecurityLogsView.vue'),
+  },
   { path: '/:pathMatch(.*)*', redirect: '/search' },
 ]
 

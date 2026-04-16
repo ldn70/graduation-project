@@ -1,7 +1,14 @@
 """API views for user management."""
 
+import csv
+import json
+from datetime import datetime, time, timedelta
+
 from django.contrib.auth import authenticate
 from django.core.paginator import Paginator
+from django.http import HttpResponse
+from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework.permissions import AllowAny
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -22,6 +29,110 @@ from .serializers import (
     RegisterSerializer,
     UserInfoSerializer,
 )
+
+SECURITY_LOG_EXPORT_MAX_ROWS = 5000
+SECURITY_LOG_EVENT_TYPES = {choice[0] for choice in AuthSecurityLog.EVENT_CHOICES}
+SECURITY_LOG_EXPORT_FIELD_MODES = {"basic", "full"}
+
+
+def _parse_security_log_datetime(raw_value, *, param_name, error_code, is_end=False):
+    raw_value = str(raw_value or "").strip()
+    if not raw_value:
+        return None, False, None
+
+    parsed = parse_datetime(raw_value)
+    parsed_from_date = False
+    if parsed is None:
+        parsed_date = parse_date(raw_value)
+        if parsed_date is None:
+            return (
+                None,
+                False,
+                error_response(
+                    f"{param_name} 参数格式错误，请使用 ISO8601 日期或日期时间格式",
+                    400,
+                    code=error_code,
+                ),
+            )
+        parsed_from_date = True
+        parsed = datetime.combine(
+            parsed_date + timedelta(days=1) if is_end else parsed_date,
+            time.min,
+        )
+
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+
+    return parsed, parsed_from_date, None
+
+
+def _build_security_log_queryset(request):
+    username = request.GET.get("username", "").strip().lower()
+    client_ip = request.GET.get("client_ip", "").strip()
+    event_type = request.GET.get("event_type", "").strip().upper()
+    start_time, _, start_error = _parse_security_log_datetime(
+        request.GET.get("start_time"),
+        param_name="start_time",
+        error_code="USER_SECURITY_LOG_START_TIME_INVALID",
+        is_end=False,
+    )
+    if start_error:
+        return None, start_error
+
+    end_time, end_from_date_only, end_error = _parse_security_log_datetime(
+        request.GET.get("end_time"),
+        param_name="end_time",
+        error_code="USER_SECURITY_LOG_END_TIME_INVALID",
+        is_end=True,
+    )
+    if end_error:
+        return None, end_error
+
+    if event_type and event_type not in SECURITY_LOG_EVENT_TYPES:
+        return (
+            None,
+            error_response(
+                "event_type 参数不在支持范围内",
+                400,
+                code="USER_SECURITY_LOG_EVENT_TYPE_INVALID",
+            ),
+        )
+
+    if start_time and end_time:
+        if end_from_date_only and start_time >= end_time:
+            return (
+                None,
+                error_response(
+                    "start_time 不能晚于 end_time",
+                    400,
+                    code="USER_SECURITY_LOG_TIME_RANGE_INVALID",
+                ),
+            )
+        if not end_from_date_only and start_time > end_time:
+            return (
+                None,
+                error_response(
+                    "start_time 不能晚于 end_time",
+                    400,
+                    code="USER_SECURITY_LOG_TIME_RANGE_INVALID",
+                ),
+            )
+
+    queryset = AuthSecurityLog.objects.all()
+    if username:
+        queryset = queryset.filter(username__icontains=username)
+    if client_ip:
+        queryset = queryset.filter(client_ip=client_ip)
+    if event_type:
+        queryset = queryset.filter(event_type=event_type)
+    if start_time:
+        queryset = queryset.filter(created_at__gte=start_time)
+    if end_time:
+        if end_from_date_only:
+            queryset = queryset.filter(created_at__lt=end_time)
+        else:
+            queryset = queryset.filter(created_at__lte=end_time)
+    return queryset, None
 
 
 class RegisterView(APIView):
@@ -172,9 +283,10 @@ class SecurityLogListView(APIView):
     throttle_scope = "auth_security_logs"
 
     def get(self, request):
-        username = request.GET.get("username", "").strip().lower()
-        client_ip = request.GET.get("client_ip", "").strip()
-        event_type = request.GET.get("event_type", "").strip().upper()
+        queryset, error = _build_security_log_queryset(request)
+        if error:
+            return error
+
         try:
             page = int(request.GET.get("page", 1))
         except (TypeError, ValueError):
@@ -188,14 +300,6 @@ class SecurityLogListView(APIView):
             return error_response("page 必须大于 0", 400, code="USER_SECURITY_LOG_PAGE_INVALID")
         if per_page <= 0:
             return error_response("per_page 必须大于 0", 400, code="USER_SECURITY_LOG_PER_PAGE_INVALID")
-
-        queryset = AuthSecurityLog.objects.all()
-        if username:
-            queryset = queryset.filter(username__icontains=username)
-        if client_ip:
-            queryset = queryset.filter(client_ip=client_ip)
-        if event_type:
-            queryset = queryset.filter(event_type=event_type)
 
         paginator = Paginator(queryset, per_page)
         page_obj = paginator.get_page(page)
@@ -211,3 +315,48 @@ class SecurityLogListView(APIView):
             },
             "查询成功",
         )
+
+
+class SecurityLogExportView(APIView):
+    throttle_scope = "auth_security_logs_export"
+
+    def get(self, request):
+        queryset, error = _build_security_log_queryset(request)
+        if error:
+            return error
+
+        fields_mode = str(request.GET.get("fields", "full") or "").strip().lower()
+        if fields_mode not in SECURITY_LOG_EXPORT_FIELD_MODES:
+            return error_response(
+                "fields 参数仅支持 basic 或 full",
+                400,
+                code="USER_SECURITY_LOG_EXPORT_FIELDS_INVALID",
+            )
+
+        include_detail = fields_mode == "full"
+        filename = f"auth_security_logs_{fields_mode}_{timezone.localtime().strftime('%Y%m%d_%H%M%S')}.csv"
+        response = HttpResponse(content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response.write("\ufeff")
+
+        writer = csv.writer(response)
+        if include_detail:
+            writer.writerow(["id", "event_type", "event_name", "username", "client_ip", "created_at", "detail"])
+        else:
+            writer.writerow(["id", "event_type", "event_name", "username", "client_ip", "created_at"])
+
+        logs = queryset[:SECURITY_LOG_EXPORT_MAX_ROWS]
+        for log in logs:
+            row = [
+                log.id,
+                log.event_type,
+                log.get_event_type_display(),
+                log.username or "",
+                log.client_ip or "",
+                timezone.localtime(log.created_at).strftime("%Y-%m-%d %H:%M:%S"),
+            ]
+            if include_detail:
+                row.append(json.dumps(log.detail or {}, ensure_ascii=False))
+            writer.writerow(row)
+
+        return response

@@ -30,6 +30,30 @@ vi.mock('../api', () => {
     },
   }))
   const generateResume = vi.fn(async () => ({ data: { data: { file_url: '/download/mock.txt' } } }))
+  const fetchSecurityLogs = vi.fn(async () => ({
+    data: {
+      data: {
+        logs: [
+          {
+            id: 1,
+            event_type: 'LOGIN_SUCCESS',
+            username: 'demo_user',
+            client_ip: '127.0.0.1',
+            detail: {},
+            created_at: '2026-04-16 10:00:00',
+          },
+        ],
+        total: 1,
+        pages: 1,
+        current: 1,
+        per_page: 20,
+      },
+    },
+  }))
+  const exportSecurityLogs = vi.fn(async () => ({
+    data: 'id,event_type,event_name,username,client_ip,created_at,detail\n1,LOGIN_SUCCESS,登录成功,demo_user,127.0.0.1,2026-04-16 10:00:00,{}',
+    headers: { 'content-disposition': 'attachment; filename="auth_security_logs_20260416.csv"' },
+  }))
   const fetchRecommendations = vi.fn(async () => ({ data: { data: { recommendations: [] } } }))
   const fetchSkillDemand = vi.fn(async () => ({
     data: { data: { skills: [{ skill_name: 'python', count: 1, percentage: 100 }] } },
@@ -59,6 +83,8 @@ vi.mock('../api', () => {
     register,
     searchJobs,
     generateResume,
+    fetchSecurityLogs,
+    exportSecurityLogs,
     fetchRecommendations,
     fetchSkillDemand,
     fetchSkillMatch,
@@ -109,6 +135,11 @@ describe('App route smoke', () => {
     await flushPromises()
     expect(api.fetchSkillDemand).toHaveBeenCalled()
     expect(wrapper.text()).toContain('技能需求 Top 8')
+
+    await router.push('/security-logs')
+    await flushPromises()
+    expect(api.fetchSecurityLogs).toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="security-logs-total"]').text()).toContain('共 1 条')
   })
 
   it('keeps search state when switching routes', async () => {

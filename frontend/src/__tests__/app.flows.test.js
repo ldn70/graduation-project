@@ -8,6 +8,7 @@ import AuthView from '../views/AuthView.vue'
 import RecommendView from '../views/RecommendView.vue'
 import SalaryView from '../views/SalaryView.vue'
 import SearchView from '../views/SearchView.vue'
+import SecurityLogsView from '../views/SecurityLogsView.vue'
 import TrendsView from '../views/TrendsView.vue'
 
 vi.mock('../lib/echartsLoader', () => {
@@ -32,6 +33,30 @@ vi.mock('../api', () => {
     },
   }))
   const generateResume = vi.fn(async () => ({ data: { data: { file_url: '/download/mock.txt' } } }))
+  const fetchSecurityLogs = vi.fn(async () => ({
+    data: {
+      data: {
+        logs: [
+          {
+            id: 1,
+            event_type: 'LOGIN_SUCCESS',
+            username: 'demo_user',
+            client_ip: '127.0.0.1',
+            detail: {},
+            created_at: '2026-04-16 10:00:00',
+          },
+        ],
+        total: 1,
+        pages: 1,
+        current: 1,
+        per_page: 20,
+      },
+    },
+  }))
+  const exportSecurityLogs = vi.fn(async () => ({
+    data: 'id,event_type,event_name,username,client_ip,created_at,detail\n1,LOGIN_SUCCESS,登录成功,demo_user,127.0.0.1,2026-04-16 10:00:00,{}',
+    headers: { 'content-disposition': 'attachment; filename="auth_security_logs_20260416.csv"' },
+  }))
   const fetchRecommendations = vi.fn(async () => ({ data: { data: { recommendations: [] } } }))
   const fetchSkillDemand = vi.fn(async () => ({
     data: { data: { skills: [{ skill_name: 'python', count: 1, percentage: 100 }] } },
@@ -61,6 +86,8 @@ vi.mock('../api', () => {
     register,
     searchJobs,
     generateResume,
+    fetchSecurityLogs,
+    exportSecurityLogs,
     fetchRecommendations,
     fetchSkillDemand,
     fetchSkillMatch,
@@ -423,5 +450,150 @@ describe('App key flows', () => {
     expect(wrapper.get('[data-testid="trend-action-hint"]').text()).toContain('格式错误')
     expect(wrapper.get('[data-testid="trend-action-hint"]').text()).toContain('month/quarter/year')
     expect(message.value).toContain('格式错误')
+  })
+
+  it('queries security logs with filters and shows table rows', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+    vi.mocked(api.fetchSecurityLogs).mockClear()
+
+    await wrapper.get('[data-testid="security-logs-username"]').setValue('demo_user')
+    await wrapper.get('[data-testid="security-logs-event-type"]').setValue('LOGIN_SUCCESS')
+    await wrapper.get('[data-testid="security-logs-query"]').trigger('click')
+    await flushPromises()
+
+    expect(api.fetchSecurityLogs).toHaveBeenCalled()
+    const lastCall = vi.mocked(api.fetchSecurityLogs).mock.calls.at(-1)?.[0]
+    expect(lastCall.username).toBe('demo_user')
+    expect(lastCall.event_type).toBe('LOGIN_SUCCESS')
+    expect(wrapper.get('[data-testid="security-logs-total"]').text()).toContain('共 1 条')
+    expect(wrapper.get('[data-testid="security-logs-event-label"]').text()).toContain('登录成功')
+    expect(wrapper.get('[data-testid="security-logs-table"]').text()).toContain('LOGIN_SUCCESS')
+  })
+
+  it('prefers backend code mapping for security-log time errors', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    vi.mocked(api.fetchSecurityLogs).mockRejectedValueOnce({
+      response: { status: 400, data: { code: 'USER_SECURITY_LOG_START_TIME_INVALID' } },
+    })
+    await wrapper.get('[data-testid="security-logs-query"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="security-logs-hint"]').text()).toContain('格式错误')
+    expect(wrapper.get('[data-testid="security-logs-hint"]').text()).toContain('start_time')
+  })
+
+  it('exports security logs to csv', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    const originalCreate = window.URL.createObjectURL
+    const originalRevoke = window.URL.revokeObjectURL
+    const createObjectURL = vi.fn(() => 'blob:security-logs')
+    const revokeObjectURL = vi.fn()
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    window.URL.createObjectURL = createObjectURL
+    window.URL.revokeObjectURL = revokeObjectURL
+
+    await wrapper.get('[data-testid="security-logs-export"]').trigger('click')
+    await flushPromises()
+
+    expect(api.exportSecurityLogs).toHaveBeenCalled()
+    expect(createObjectURL).toHaveBeenCalled()
+    expect(revokeObjectURL).toHaveBeenCalled()
+    expect(message.value).toContain('导出成功')
+
+    clickSpy.mockRestore()
+    window.URL.createObjectURL = originalCreate
+    window.URL.revokeObjectURL = originalRevoke
+  })
+
+  it('passes selected export fields mode when exporting security logs', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    await wrapper.get('[data-testid="security-logs-export-fields"]').setValue('basic')
+    await wrapper.get('[data-testid="security-logs-export"]').trigger('click')
+    await flushPromises()
+
+    const lastCall = vi.mocked(api.exportSecurityLogs).mock.calls.at(-1)?.[0]
+    expect(lastCall.fields).toBe('basic')
+  })
+
+  it('shows mapped hint for invalid security-log export fields', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    vi.mocked(api.exportSecurityLogs).mockRejectedValueOnce({
+      response: { status: 400, data: { code: 'USER_SECURITY_LOG_EXPORT_FIELDS_INVALID' } },
+    })
+    await wrapper.get('[data-testid="security-logs-export"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="security-logs-hint"]').text()).toContain('参数错误')
+    expect(wrapper.get('[data-testid="security-logs-hint"]').text()).toContain('basic 或 full')
+  })
+
+  it('copies security-log detail json by one click', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    const writeText = vi.fn(async () => {})
+    const originalClipboard = navigator.clipboard
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    })
+
+    await wrapper.get('[data-testid="security-logs-copy-detail"]').trigger('click')
+    await flushPromises()
+
+    expect(writeText).toHaveBeenCalledWith('{}')
+    expect(wrapper.get('[data-testid="security-logs-copy-detail"]').text()).toContain('已复制')
+
+    Object.defineProperty(navigator, 'clipboard', {
+      value: originalClipboard,
+      configurable: true,
+    })
+  })
+
+  it('applies quick 24h time range for security logs', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+    vi.mocked(api.fetchSecurityLogs).mockClear()
+
+    await wrapper.get('[data-testid="security-logs-quick-24h"]').trigger('click')
+    await flushPromises()
+
+    const lastCall = vi.mocked(api.fetchSecurityLogs).mock.calls.at(-1)?.[0]
+    expect(lastCall.start_time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
+    expect(lastCall.end_time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
+    const startAt = new Date(lastCall.start_time)
+    const endAt = new Date(lastCall.end_time)
+    expect(Number.isFinite(startAt.getTime())).toBe(true)
+    expect(Number.isFinite(endAt.getTime())).toBe(true)
+    const diffHour = Math.round((endAt.getTime() - startAt.getTime()) / (1000 * 60 * 60))
+    expect(diffHour).toBe(24)
+    expect(lastCall.page).toBe(1)
+    expect(lastCall.per_page).toBe(20)
+  })
+
+  it('clears time range with quick clear action', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+    vi.mocked(api.fetchSecurityLogs).mockClear()
+
+    await wrapper.get('[data-testid="security-logs-quick-7d"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="security-logs-quick-clear"]').trigger('click')
+    await flushPromises()
+
+    const lastCall = vi.mocked(api.fetchSecurityLogs).mock.calls.at(-1)?.[0]
+    expect(lastCall.start_time).toBeUndefined()
+    expect(lastCall.end_time).toBeUndefined()
+    expect(wrapper.get('[data-testid="security-logs-start-time"]').element.value).toBe('')
+    expect(wrapper.get('[data-testid="security-logs-end-time"]').element.value).toBe('')
   })
 })

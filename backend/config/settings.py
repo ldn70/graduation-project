@@ -171,6 +171,7 @@ REST_FRAMEWORK = {
         "resume_generate": _env_rate("DRF_THROTTLE_RESUME_GENERATE_RATE", "30/min"),
         "resume_download": _env_rate("DRF_THROTTLE_RESUME_DOWNLOAD_RATE", "180/min"),
         "auth_security_logs": _env_rate("DRF_THROTTLE_AUTH_SECURITY_LOGS_RATE", "60/min"),
+        "auth_security_logs_export": _env_rate("DRF_THROTTLE_AUTH_SECURITY_LOGS_EXPORT_RATE", "20/min"),
     },
     "EXCEPTION_HANDLER": "core.exceptions.api_exception_handler",
 }

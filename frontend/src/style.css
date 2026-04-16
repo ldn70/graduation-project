@@ -296,8 +296,89 @@ button.is-loading::before {
   max-width: 600px;
 }
 
+.logs-filter-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.logs-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.logs-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+}
+
+.logs-table th,
+.logs-table td {
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+  font-size: 13px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.logs-table thead th {
+  background: #f7faf9;
+  color: #294240;
+  position: sticky;
+  top: 0;
+}
+
+.logs-table code {
+  font-size: 12px;
+  color: #1f2937;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.quick-range-label {
+  margin: 6px 0 0;
+  font-weight: 600;
+}
+
+.logs-table td .hint {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
+.log-detail {
+  min-width: 220px;
+}
+
+.log-detail summary {
+  cursor: pointer;
+  color: #0f766e;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.log-detail pre {
+  margin: 8px 0 0;
+  background: #f7faf9;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  max-width: 360px;
+  overflow: auto;
+}
+
+.mini-btn {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
 @media (max-width: 860px) {
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .logs-filter-grid {
     grid-template-columns: 1fr;
   }
 }

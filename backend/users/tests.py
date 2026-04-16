@@ -1,7 +1,9 @@
 from django.contrib.auth import get_user_model
 from django.conf import settings as django_settings
 from django.core.cache import cache
+from django.utils import timezone
 from rest_framework.test import APITestCase
+from datetime import timedelta
 from unittest.mock import patch
 
 from .models import AuthSecurityLog
@@ -207,3 +209,122 @@ class UserApiTests(APITestCase):
         resp = self.client.get("/api/users/security-logs", {"page": "bad"})
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.data.get("code"), "USER_SECURITY_LOG_PAGE_INVALID")
+
+    def test_security_logs_query_by_time_range(self):
+        viewer = User.objects.create_user(username="time_range_viewer", password="12345678")
+        base_time = timezone.now()
+        old_time = base_time - timedelta(days=3)
+        hit_time = base_time - timedelta(days=1)
+        recent_time = base_time
+
+        old_log = AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_FAILED,
+            detail={},
+        )
+        recent_log = AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_SUCCESS,
+            detail={},
+        )
+        hit_log = AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_LOCK_BLOCKED,
+            detail={},
+        )
+
+        AuthSecurityLog.objects.filter(pk=old_log.pk).update(created_at=old_time)
+        AuthSecurityLog.objects.filter(pk=hit_log.pk).update(created_at=hit_time)
+        AuthSecurityLog.objects.filter(pk=recent_log.pk).update(created_at=recent_time)
+
+        self.client.force_authenticate(user=viewer)
+        start_time = (base_time - timedelta(days=2)).isoformat()
+        end_time = (base_time + timedelta(hours=1)).isoformat()
+        resp = self.client.get("/api/users/security-logs", {"start_time": start_time, "end_time": end_time})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["data"]["total"], 2)
+        self.assertTrue(all(item["event_type"] != AuthSecurityLog.EVENT_LOGIN_FAILED for item in resp.data["data"]["logs"]))
+
+    def test_security_logs_invalid_time_filters_return_error_codes(self):
+        viewer = User.objects.create_user(username="time_validation_viewer", password="12345678")
+        self.client.force_authenticate(user=viewer)
+
+        bad_start = self.client.get("/api/users/security-logs", {"start_time": "not-a-time"})
+        self.assertEqual(bad_start.status_code, 400)
+        self.assertEqual(bad_start.data.get("code"), "USER_SECURITY_LOG_START_TIME_INVALID")
+
+        bad_end = self.client.get("/api/users/security-logs", {"end_time": "not-a-time"})
+        self.assertEqual(bad_end.status_code, 400)
+        self.assertEqual(bad_end.data.get("code"), "USER_SECURITY_LOG_END_TIME_INVALID")
+
+        reverse_range = self.client.get(
+            "/api/users/security-logs",
+            {"start_time": "2026-04-16T10:00:00+08:00", "end_time": "2026-04-15T10:00:00+08:00"},
+        )
+        self.assertEqual(reverse_range.status_code, 400)
+        self.assertEqual(reverse_range.data.get("code"), "USER_SECURITY_LOG_TIME_RANGE_INVALID")
+
+    def test_security_logs_invalid_event_type_code(self):
+        viewer = User.objects.create_user(username="event_type_viewer", password="12345678")
+        self.client.force_authenticate(user=viewer)
+        resp = self.client.get("/api/users/security-logs", {"event_type": "UNKNOWN_EVENT"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "USER_SECURITY_LOG_EVENT_TYPE_INVALID")
+
+    def test_security_logs_export_csv(self):
+        viewer = User.objects.create_user(username="export_viewer", password="12345678")
+        AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_FAILED,
+            detail={"user_fail_count": 1},
+        )
+        AuthSecurityLog.objects.create(
+            username="bob",
+            client_ip="127.0.0.2",
+            event_type=AuthSecurityLog.EVENT_LOGIN_SUCCESS,
+            detail={},
+        )
+
+        self.client.force_authenticate(user=viewer)
+        resp = self.client.get("/api/users/security-logs/export", {"username": "alice"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn("text/csv", resp["Content-Type"])
+        self.assertIn("attachment; filename=", resp["Content-Disposition"])
+
+        csv_text = resp.content.decode("utf-8-sig")
+        lines = csv_text.strip().splitlines()
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertEqual(lines[0], "id,event_type,event_name,username,client_ip,created_at,detail")
+        self.assertIn("LOGIN_FAILED", lines[1])
+        self.assertNotIn("LOGIN_SUCCESS", csv_text)
+
+    def test_security_logs_export_basic_fields_csv(self):
+        viewer = User.objects.create_user(username="export_basic_viewer", password="12345678")
+        AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_FAILED,
+            detail={"user_fail_count": 1},
+        )
+
+        self.client.force_authenticate(user=viewer)
+        resp = self.client.get("/api/users/security-logs/export", {"fields": "basic"})
+        self.assertEqual(resp.status_code, 200)
+
+        csv_text = resp.content.decode("utf-8-sig")
+        lines = csv_text.strip().splitlines()
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertEqual(lines[0], "id,event_type,event_name,username,client_ip,created_at")
+        self.assertNotIn("detail", lines[0])
+        self.assertEqual(len(lines[1].split(",")), 6)
+
+    def test_security_logs_export_invalid_fields_code(self):
+        viewer = User.objects.create_user(username="export_invalid_fields_viewer", password="12345678")
+        self.client.force_authenticate(user=viewer)
+        resp = self.client.get("/api/users/security-logs/export", {"fields": "unknown"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "USER_SECURITY_LOG_EXPORT_FIELDS_INVALID")

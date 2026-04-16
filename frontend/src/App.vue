@@ -7,6 +7,7 @@ const navItems = [
   { to: '/recommend', label: '推荐与技能' },
   { to: '/salary', label: '薪资预测' },
   { to: '/trends', label: '趋势分析' },
+  { to: '/security-logs', label: '安全审计' },
 ]
 </script>
 
@@ -14,7 +15,7 @@ const navItems = [
   <div class="app-shell">
     <header class="hero">
       <h1>前程无忧分析系统（重建版）</h1>
-      <p>已接通：用户管理、搜索、推荐、技能分析、薪资预测、趋势分析、简历生成</p>
+      <p>已接通：用户管理、搜索、推荐、技能分析、薪资预测、趋势分析、简历生成、安全审计日志</p>
       <p data-testid="message" class="msg">{{ message }}</p>
       <nav class="nav">
         <RouterLink
