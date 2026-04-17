@@ -274,6 +274,70 @@ class UserApiTests(APITestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.data.get("code"), "USER_SECURITY_LOG_EVENT_TYPE_INVALID")
 
+    def test_security_logs_stats_requires_auth(self):
+        resp = self.client.get("/api/users/security-logs/stats")
+        self.assertEqual(resp.status_code, 401)
+        self.assertEqual(resp.data.get("code"), "COMMON_AUTH_REQUIRED")
+
+    def test_security_logs_stats_aggregates_with_filters(self):
+        viewer = User.objects.create_user(username="stats_viewer", password="12345678")
+        base_time = timezone.now()
+
+        first = AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_FAILED,
+            detail={},
+        )
+        second = AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_SUCCESS,
+            detail={},
+        )
+        third = AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.2",
+            event_type=AuthSecurityLog.EVENT_LOGIN_SUCCESS,
+            detail={},
+        )
+        AuthSecurityLog.objects.create(
+            username="bob",
+            client_ip="10.0.0.8",
+            event_type=AuthSecurityLog.EVENT_LOGIN_LOCK_TRIGGERED,
+            detail={},
+        )
+
+        AuthSecurityLog.objects.filter(pk=first.pk).update(created_at=base_time - timedelta(days=1))
+        AuthSecurityLog.objects.filter(pk=second.pk).update(created_at=base_time)
+        AuthSecurityLog.objects.filter(pk=third.pk).update(created_at=base_time)
+
+        self.client.force_authenticate(user=viewer)
+        resp = self.client.get("/api/users/security-logs/stats", {"username": "alice"})
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["data"]["total"], 3)
+
+        share = resp.data["data"]["event_share"]
+        self.assertEqual(len(share), 2)
+        self.assertEqual(share[0]["event_type"], AuthSecurityLog.EVENT_LOGIN_SUCCESS)
+        self.assertEqual(share[0]["count"], 2)
+        self.assertEqual(share[0]["percentage"], 66.67)
+        self.assertEqual(share[1]["event_type"], AuthSecurityLog.EVENT_LOGIN_FAILED)
+        self.assertEqual(share[1]["count"], 1)
+        self.assertEqual(share[1]["percentage"], 33.33)
+
+        trend = resp.data["data"]["daily_trend"]
+        self.assertEqual(len(trend), 2)
+        self.assertEqual(trend[0]["count"], 1)
+        self.assertEqual(trend[1]["count"], 2)
+
+    def test_security_logs_stats_invalid_time_filters_return_error_codes(self):
+        viewer = User.objects.create_user(username="stats_time_validation_viewer", password="12345678")
+        self.client.force_authenticate(user=viewer)
+        bad_start = self.client.get("/api/users/security-logs/stats", {"start_time": "not-a-time"})
+        self.assertEqual(bad_start.status_code, 400)
+        self.assertEqual(bad_start.data.get("code"), "USER_SECURITY_LOG_START_TIME_INVALID")
+
     def test_security_logs_export_csv(self):
         viewer = User.objects.create_user(username="export_viewer", password="12345678")
         AuthSecurityLog.objects.create(

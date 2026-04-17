@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { nextTick } from 'vue'
 
 import * as api from '../api'
+import { loadEcharts } from '../lib/echartsLoader'
 import { message, resetDashboardState, searchForm } from '../state/dashboardState'
 import AuthView from '../views/AuthView.vue'
 import RecommendView from '../views/RecommendView.vue'
@@ -53,6 +54,15 @@ vi.mock('../api', () => {
       },
     },
   }))
+  const fetchSecurityLogStats = vi.fn(async () => ({
+    data: {
+      data: {
+        total: 1,
+        event_share: [{ event_type: 'LOGIN_SUCCESS', event_name: '登录成功', count: 1, percentage: 100 }],
+        daily_trend: [{ date: '2026-04-16', count: 1 }],
+      },
+    },
+  }))
   const exportSecurityLogs = vi.fn(async () => ({
     data: 'id,event_type,event_name,username,client_ip,created_at,detail\n1,LOGIN_SUCCESS,登录成功,demo_user,127.0.0.1,2026-04-16 10:00:00,{}',
     headers: { 'content-disposition': 'attachment; filename="auth_security_logs_20260416.csv"' },
@@ -87,6 +97,7 @@ vi.mock('../api', () => {
     searchJobs,
     generateResume,
     fetchSecurityLogs,
+    fetchSecurityLogStats,
     exportSecurityLogs,
     fetchRecommendations,
     fetchSkillDemand,
@@ -456,6 +467,7 @@ describe('App key flows', () => {
     const wrapper = mount(SecurityLogsView)
     await flushPromises()
     vi.mocked(api.fetchSecurityLogs).mockClear()
+    vi.mocked(api.fetchSecurityLogStats).mockClear()
 
     await wrapper.get('[data-testid="security-logs-username"]').setValue('demo_user')
     await wrapper.get('[data-testid="security-logs-event-type"]').setValue('LOGIN_SUCCESS')
@@ -463,12 +475,27 @@ describe('App key flows', () => {
     await flushPromises()
 
     expect(api.fetchSecurityLogs).toHaveBeenCalled()
+    expect(api.fetchSecurityLogStats).toHaveBeenCalled()
     const lastCall = vi.mocked(api.fetchSecurityLogs).mock.calls.at(-1)?.[0]
+    const statsCall = vi.mocked(api.fetchSecurityLogStats).mock.calls.at(-1)?.[0]
     expect(lastCall.username).toBe('demo_user')
     expect(lastCall.event_type).toBe('LOGIN_SUCCESS')
+    expect(statsCall.username).toBe('demo_user')
+    expect(statsCall.event_type).toBe('LOGIN_SUCCESS')
+    expect(statsCall.page).toBeUndefined()
+    expect(statsCall.per_page).toBeUndefined()
     expect(wrapper.get('[data-testid="security-logs-total"]').text()).toContain('共 1 条')
     expect(wrapper.get('[data-testid="security-logs-event-label"]').text()).toContain('登录成功')
     expect(wrapper.get('[data-testid="security-logs-table"]').text()).toContain('LOGIN_SUCCESS')
+  })
+
+  it('renders security-log analytics charts and requests echarts loader', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="security-logs-event-share-chart"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="security-logs-time-trend-chart"]').exists()).toBe(true)
+    expect(loadEcharts).toHaveBeenCalled()
   })
 
   it('prefers backend code mapping for security-log time errors', async () => {
@@ -510,6 +537,42 @@ describe('App key flows', () => {
     window.URL.revokeObjectURL = originalRevoke
   })
 
+  it('previews first 10 security logs before export', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+    vi.mocked(api.fetchSecurityLogs).mockClear()
+
+    vi.mocked(api.fetchSecurityLogs).mockResolvedValueOnce({
+      data: {
+        data: {
+          logs: [
+            {
+              id: 11,
+              event_type: 'LOGIN_FAILED',
+              username: 'preview_user',
+              client_ip: '10.0.0.11',
+              detail: { reason: 'bad-password' },
+              created_at: '2026-04-16 12:00:00',
+            },
+          ],
+          total: 23,
+          pages: 3,
+          current: 1,
+          per_page: 10,
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="security-logs-preview"]').trigger('click')
+    await flushPromises()
+
+    const previewCall = vi.mocked(api.fetchSecurityLogs).mock.calls.at(-1)?.[0]
+    expect(previewCall.page).toBe(1)
+    expect(previewCall.per_page).toBe(10)
+    expect(wrapper.get('[data-testid="security-logs-preview-total"]').text()).toContain('23')
+    expect(wrapper.get('[data-testid="security-logs-preview-table"]').text()).toContain('preview_user')
+  })
+
   it('passes selected export fields mode when exporting security logs', async () => {
     const wrapper = mount(SecurityLogsView)
     await flushPromises()
@@ -534,6 +597,91 @@ describe('App key flows', () => {
 
     expect(wrapper.get('[data-testid="security-logs-hint"]').text()).toContain('参数错误')
     expect(wrapper.get('[data-testid="security-logs-hint"]').text()).toContain('basic 或 full')
+  })
+
+  it('restores latest security-log filters from localStorage on first load', async () => {
+    localStorage.setItem(
+      'dashboard.security_logs.filters.v1',
+      JSON.stringify({
+        username: 'remember_user',
+        client_ip: '10.0.0.8',
+        event_type: 'LOGIN_FAILED',
+        start_time: '2026-04-01T00:00',
+        end_time: '2026-04-17T23:59',
+        export_fields: 'basic',
+        per_page: 50,
+      }),
+    )
+
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    const initialCall = vi.mocked(api.fetchSecurityLogs).mock.calls.at(-1)?.[0]
+    expect(initialCall.username).toBe('remember_user')
+    expect(initialCall.client_ip).toBe('10.0.0.8')
+    expect(initialCall.event_type).toBe('LOGIN_FAILED')
+    expect(initialCall.start_time).toBe('2026-04-01T00:00')
+    expect(initialCall.end_time).toBe('2026-04-17T23:59')
+    expect(initialCall.per_page).toBe(50)
+    expect(wrapper.get('[data-testid="security-logs-username"]').element.value).toBe('remember_user')
+    expect(wrapper.get('[data-testid="security-logs-export-fields"]').element.value).toBe('basic')
+  })
+
+  it('loads recent security-log filter history and applies selected snapshot', async () => {
+    localStorage.setItem(
+      'dashboard.security_logs.filter_history.v1',
+      JSON.stringify([
+        {
+          username: 'history_user_1',
+          client_ip: '10.0.0.21',
+          event_type: 'LOGIN_FAILED',
+          start_time: '2026-04-10T00:00',
+          end_time: '2026-04-11T00:00',
+          export_fields: 'full',
+          per_page: 50,
+        },
+        {
+          username: 'history_user_2',
+          client_ip: '10.0.0.22',
+          event_type: 'LOGIN_SUCCESS',
+          start_time: '',
+          end_time: '',
+          export_fields: 'basic',
+          per_page: 20,
+        },
+      ]),
+    )
+
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    const historyItems = wrapper.findAll('[data-testid="security-logs-history-item"]')
+    expect(historyItems.length).toBe(2)
+
+    vi.mocked(api.fetchSecurityLogs).mockClear()
+    vi.mocked(api.fetchSecurityLogs).mockResolvedValueOnce({
+      data: {
+        data: {
+          logs: [],
+          total: 0,
+          pages: 0,
+          current: 1,
+          per_page: 50,
+        },
+      },
+    })
+
+    await historyItems[0].trigger('click')
+    await flushPromises()
+
+    const lastCall = vi.mocked(api.fetchSecurityLogs).mock.calls.at(-1)?.[0]
+    expect(lastCall.username).toBe('history_user_1')
+    expect(lastCall.client_ip).toBe('10.0.0.21')
+    expect(lastCall.event_type).toBe('LOGIN_FAILED')
+    expect(lastCall.start_time).toBe('2026-04-10T00:00')
+    expect(lastCall.end_time).toBe('2026-04-11T00:00')
+    expect(lastCall.per_page).toBe(50)
+    expect(lastCall.page).toBe(1)
   })
 
   it('copies security-log detail json by one click', async () => {

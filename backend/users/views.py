@@ -5,6 +5,8 @@ import json
 from datetime import datetime, time, timedelta
 
 from django.contrib.auth import authenticate
+from django.db.models import Count
+from django.db.models.functions import TruncDate
 from django.core.paginator import Paginator
 from django.http import HttpResponse
 from django.utils import timezone
@@ -360,3 +362,54 @@ class SecurityLogExportView(APIView):
             writer.writerow(row)
 
         return response
+
+
+class SecurityLogStatsView(APIView):
+    throttle_scope = "auth_security_logs"
+
+    def get(self, request):
+        queryset, error = _build_security_log_queryset(request)
+        if error:
+            return error
+
+        total = queryset.count()
+        choice_map = dict(AuthSecurityLog.EVENT_CHOICES)
+
+        event_share_rows = (
+            queryset.values("event_type")
+            .annotate(count=Count("id"))
+            .order_by("-count", "event_type")
+        )
+        event_share = [
+            {
+                "event_type": row["event_type"],
+                "event_name": choice_map.get(row["event_type"], row["event_type"]),
+                "count": row["count"],
+                "percentage": round((row["count"] / total * 100), 2) if total else 0,
+            }
+            for row in event_share_rows
+        ]
+
+        tz = timezone.get_current_timezone()
+        trend_rows = (
+            queryset.annotate(date=TruncDate("created_at", tzinfo=tz))
+            .values("date")
+            .annotate(count=Count("id"))
+            .order_by("date")
+        )
+        daily_trend = [
+            {
+                "date": row["date"].isoformat() if row["date"] else "",
+                "count": row["count"],
+            }
+            for row in trend_rows
+        ]
+
+        return success_response(
+            {
+                "total": total,
+                "event_share": event_share,
+                "daily_trend": daily_trend,
+            },
+            "统计成功",
+        )

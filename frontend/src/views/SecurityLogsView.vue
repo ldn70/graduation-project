@@ -1,13 +1,24 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { loadEcharts } from '../lib/echartsLoader'
 import {
+  applySecurityLogFilterSnapshot,
+  loadSecurityLogFilterHistoryFromStorage,
   loading,
   onExportSecurityLogs,
   onFetchSecurityLogs,
+  onPreviewSecurityLogsExport,
   requestState,
+  restoreSecurityLogFiltersFromStorage,
   resetSecurityLogFilters,
+  securityLogExportPreview,
+  securityLogExportPreviewFetched,
+  securityLogExportPreviewTotal,
+  securityLogFilterHistory,
   securityLogForm,
   securityLogHint,
+  securityLogStatsDailyTrend,
+  securityLogStatsEventShare,
   securityLogs,
   securityLogsCurrent,
   securityLogsPages,
@@ -23,8 +34,16 @@ const eventTypeOptions = [
   { value: 'LOGIN_SUCCESS', label: '登录成功' },
   { value: 'LOGIN_FAILURES_RESET', label: '失败计数重置' },
 ]
-const eventTypeLabelMap = Object.fromEntries(eventTypeOptions.filter((item) => item.value).map((item) => [item.value, item.label]))
+
+const eventTypeLabelMap = Object.fromEntries(
+  eventTypeOptions.filter((item) => item.value).map((item) => [item.value, item.label]),
+)
+
 const copiedLogId = ref(null)
+const eventShareChartRef = ref(null)
+const timeTrendChartRef = ref(null)
+let eventShareChart = null
+let timeTrendChart = null
 let copyResetTimer = null
 
 const canPrev = computed(() => securityLogsCurrent.value > 1 && !loading.value.securityLogs)
@@ -38,10 +57,22 @@ const showEmpty = computed(
     !securityLogs.value.length &&
     !securityLogHint.value,
 )
+const showPreviewEmpty = computed(
+  () =>
+    securityLogExportPreviewFetched.value &&
+    !loading.value.securityLogsPreview &&
+    !securityLogExportPreview.value.length &&
+    !securityLogHint.value,
+)
+const hasFilterHistory = computed(
+  () => Array.isArray(securityLogFilterHistory.value) && securityLogFilterHistory.value.length > 0,
+)
 
 const formatDateTimeLocal = (date) => {
   const pad = (num) => String(num).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(
+    date.getMinutes(),
+  )}`
 }
 
 const getEventTypeLabel = (eventType) => eventTypeLabelMap[eventType] || eventType || '未知事件'
@@ -52,6 +83,100 @@ const formatLogDetail = (detail) => {
   } catch {
     return '{}'
   }
+}
+
+const formatFilterHistoryLabel = (snapshot, index) => {
+  const username = String(snapshot?.username || '').trim()
+  const eventType = String(snapshot?.event_type || '').trim()
+  const startTime = String(snapshot?.start_time || '').trim()
+  const endTime = String(snapshot?.end_time || '').trim()
+  const parts = []
+
+  if (username) parts.push(`user:${username}`)
+  if (eventType) parts.push(`event:${eventType}`)
+  if (startTime || endTime) parts.push('time')
+
+  return parts.length ? `#${index + 1} ${parts.join(' | ')}` : `#${index + 1} last filter`
+}
+
+const buildEventShareSeries = () => {
+  const rows = Array.isArray(securityLogStatsEventShare.value) ? securityLogStatsEventShare.value : []
+  return {
+    labels: rows.map((row) => row.event_name || getEventTypeLabel(row.event_type)),
+    values: rows.map((row) => Number(row.percentage || 0)),
+  }
+}
+
+const buildTimeTrendSeries = () => {
+  const rows = Array.isArray(securityLogStatsDailyTrend.value) ? securityLogStatsDailyTrend.value : []
+  const labels = rows.map((row) => String(row.date || ''))
+  return {
+    labels,
+    values: rows.map((row) => Number(row.count || 0)),
+  }
+}
+
+const renderEventShareChart = async () => {
+  if (!eventShareChartRef.value) return
+  const echarts = await loadEcharts()
+  if (!eventShareChart) {
+    eventShareChart = echarts.init(eventShareChartRef.value)
+  }
+
+  const { labels, values } = buildEventShareSeries()
+  eventShareChart.setOption({
+    tooltip: { trigger: 'axis', valueFormatter: (value) => `${value}%` },
+    xAxis: {
+      type: 'category',
+      data: labels,
+      axisLabel: { interval: 0, rotate: labels.length > 3 ? 18 : 0 },
+    },
+    yAxis: {
+      type: 'value',
+      name: '占比(%)',
+      max: 100,
+    },
+    series: [
+      {
+        type: 'bar',
+        data: values,
+        itemStyle: { color: '#0f766e' },
+      },
+    ],
+  })
+}
+
+const renderTimeTrendChart = async () => {
+  if (!timeTrendChartRef.value) return
+  const echarts = await loadEcharts()
+  if (!timeTrendChart) {
+    timeTrendChart = echarts.init(timeTrendChartRef.value)
+  }
+
+  const { labels, values } = buildTimeTrendSeries()
+  timeTrendChart.setOption({
+    tooltip: { trigger: 'axis' },
+    xAxis: {
+      type: 'category',
+      data: labels,
+      axisLabel: { interval: 0, rotate: labels.length > 6 ? 24 : 0 },
+    },
+    yAxis: {
+      type: 'value',
+      name: '日志数',
+      minInterval: 1,
+    },
+    series: [
+      {
+        type: 'line',
+        smooth: true,
+        data: values,
+        itemStyle: { color: '#f97316' },
+        lineStyle: { color: '#f97316', width: 2 },
+        areaStyle: { color: 'rgba(249, 115, 22, 0.12)' },
+      },
+    ],
+  })
 }
 
 const onCopyLogDetail = async (log) => {
@@ -85,9 +210,8 @@ const onCopyLogDetail = async (log) => {
 
   if (!copied) return
   copiedLogId.value = log.id
-  if (copyResetTimer) {
-    clearTimeout(copyResetTimer)
-  }
+  if (copyResetTimer) clearTimeout(copyResetTimer)
+
   copyResetTimer = setTimeout(() => {
     copiedLogId.value = null
     copyResetTimer = null
@@ -101,6 +225,15 @@ const onQuery = async () => {
 
 const onReset = () => {
   resetSecurityLogFilters()
+}
+
+const onPreviewExport = async () => {
+  await onPreviewSecurityLogsExport()
+}
+
+const onApplyFilterHistory = async (snapshot) => {
+  applySecurityLogFilterSnapshot(snapshot)
+  await onFetchSecurityLogs()
 }
 
 const onPrev = async () => {
@@ -136,10 +269,21 @@ const onClearTimeRange = async () => {
   await onFetchSecurityLogs()
 }
 
+watch(
+  [securityLogStatsEventShare, securityLogStatsDailyTrend],
+  () => {
+    void Promise.all([renderEventShareChart(), renderTimeTrendChart()])
+  },
+  { deep: true },
+)
+
 onMounted(async () => {
+  loadSecurityLogFilterHistoryFromStorage()
   if (!requestState.value.securityLogsFetched) {
+    restoreSecurityLogFiltersFromStorage()
     await onFetchSecurityLogs()
   }
+  await Promise.all([renderEventShareChart(), renderTimeTrendChart()])
 })
 
 onBeforeUnmount(() => {
@@ -147,12 +291,31 @@ onBeforeUnmount(() => {
     clearTimeout(copyResetTimer)
     copyResetTimer = null
   }
+  eventShareChart?.dispose()
+  eventShareChart = null
+  timeTrendChart?.dispose()
+  timeTrendChart = null
 })
 </script>
 
 <template>
   <section class="panel">
     <h2>安全审计日志</h2>
+
+    <div v-if="hasFilterHistory" data-testid="security-logs-filter-history" class="row">
+      <span class="hint">Recent filters:</span>
+      <button
+        v-for="(snapshot, index) in securityLogFilterHistory"
+        :key="`filter-history-${index}`"
+        data-testid="security-logs-history-item"
+        class="ghost-btn mini-btn"
+        :disabled="loading.securityLogs"
+        @click="onApplyFilterHistory(snapshot)"
+      >
+        {{ formatFilterHistoryLabel(snapshot, index) }}
+      </button>
+    </div>
+
     <div class="grid logs-filter-grid">
       <input v-model="securityLogForm.username" data-testid="security-logs-username" placeholder="账号筛选（username）" />
       <input v-model="securityLogForm.client_ip" data-testid="security-logs-ip" placeholder="IP 筛选（client_ip）" />
@@ -179,21 +342,38 @@ onBeforeUnmount(() => {
         placeholder="结束时间"
       />
     </div>
+
     <div class="row">
       <span class="hint quick-range-label">快捷时间：</span>
       <button data-testid="security-logs-quick-24h" class="ghost-btn" :disabled="loading.securityLogs" @click="onQuickRange(24)">
         近 24 小时
       </button>
-      <button data-testid="security-logs-quick-7d" class="ghost-btn" :disabled="loading.securityLogs" @click="onQuickRange(24 * 7)">
+      <button
+        data-testid="security-logs-quick-7d"
+        class="ghost-btn"
+        :disabled="loading.securityLogs"
+        @click="onQuickRange(24 * 7)"
+      >
         近 7 天
       </button>
-      <button data-testid="security-logs-quick-30d" class="ghost-btn" :disabled="loading.securityLogs" @click="onQuickRange(24 * 30)">
+      <button
+        data-testid="security-logs-quick-30d"
+        class="ghost-btn"
+        :disabled="loading.securityLogs"
+        @click="onQuickRange(24 * 30)"
+      >
         近 30 天
       </button>
-      <button data-testid="security-logs-quick-clear" class="ghost-btn" :disabled="loading.securityLogs" @click="onClearTimeRange">
+      <button
+        data-testid="security-logs-quick-clear"
+        class="ghost-btn"
+        :disabled="loading.securityLogs"
+        @click="onClearTimeRange"
+      >
         清空时间
       </button>
     </div>
+
     <div class="row">
       <select v-model="securityLogForm.export_fields" data-testid="security-logs-export-fields">
         <option value="full">导出详情字段（full）</option>
@@ -208,6 +388,15 @@ onBeforeUnmount(() => {
         {{ loading.securityLogs ? '查询中...' : '查询日志' }}
       </button>
       <button
+        data-testid="security-logs-preview"
+        class="ghost-btn"
+        :disabled="loading.securityLogsPreview"
+        :class="{ 'is-loading': loading.securityLogsPreview }"
+        @click="onPreviewExport"
+      >
+        {{ loading.securityLogsPreview ? '预览中...' : '导出前预览（前 10 条）' }}
+      </button>
+      <button
         data-testid="security-logs-export"
         class="ghost-btn"
         :disabled="loading.securityLogsExport"
@@ -220,6 +409,44 @@ onBeforeUnmount(() => {
         重置筛选
       </button>
     </div>
+
+    <div
+      v-if="securityLogExportPreviewFetched || loading.securityLogsPreview"
+      data-testid="security-logs-preview-panel"
+      class="panel"
+    >
+      <p data-testid="security-logs-preview-total" class="hint">
+        导出预览：共 {{ securityLogExportPreviewTotal }} 条，展示前 10 条
+      </p>
+      <div v-if="loading.securityLogsPreview" class="panel-skeleton" data-testid="security-logs-preview-skeleton">
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line short"></div>
+      </div>
+      <p v-else-if="showPreviewEmpty" data-testid="security-logs-preview-empty" class="hint">
+        当前筛选条件下暂无可导出的审计日志。
+      </p>
+      <div v-else-if="securityLogExportPreview.length" class="logs-table-wrap">
+        <table data-testid="security-logs-preview-table" class="logs-table">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>事件</th>
+              <th>账号</th>
+              <th>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in securityLogExportPreview" :key="`preview-${item.id}`">
+              <td>{{ item.created_at }}</td>
+              <td>{{ getEventTypeLabel(item.event_type) }}</td>
+              <td>{{ item.username || '-' }}</td>
+              <td>{{ item.client_ip || '-' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <div
       v-if="securityLogHint"
       data-testid="security-logs-hint"
@@ -233,6 +460,29 @@ onBeforeUnmount(() => {
           重试查询
         </button>
       </div>
+    </div>
+
+    <div class="security-logs-chart-grid">
+      <article class="security-logs-chart-card">
+        <h3>事件占比（全量筛选）</h3>
+        <p class="hint">基于当前筛选条件的全量日志统计</p>
+        <div
+          ref="eventShareChartRef"
+          data-testid="security-logs-event-share-chart"
+          class="chart security-logs-chart"
+          :class="{ 'chart--loading': loading.securityLogsStats }"
+        ></div>
+      </article>
+      <article class="security-logs-chart-card">
+        <h3>时间趋势（全量筛选）</h3>
+        <p class="hint">按日期聚合日志数量，查询后自动联动更新</p>
+        <div
+          ref="timeTrendChartRef"
+          data-testid="security-logs-time-trend-chart"
+          class="chart security-logs-chart"
+          :class="{ 'chart--loading': loading.securityLogsStats }"
+        ></div>
+      </article>
     </div>
 
     <p data-testid="security-logs-total" class="hint">
@@ -276,11 +526,7 @@ onBeforeUnmount(() => {
             <td>{{ item.client_ip || '-' }}</td>
             <td>
               <div class="row">
-                <button
-                  data-testid="security-logs-copy-detail"
-                  class="ghost-btn mini-btn"
-                  @click="onCopyLogDetail(item)"
-                >
+                <button data-testid="security-logs-copy-detail" class="ghost-btn mini-btn" @click="onCopyLogDetail(item)">
                   {{ copiedLogId === item.id ? '已复制' : '复制 JSON' }}
                 </button>
               </div>

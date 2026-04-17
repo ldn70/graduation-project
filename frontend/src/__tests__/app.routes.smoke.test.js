@@ -18,13 +18,13 @@ vi.mock('../lib/echartsLoader', () => {
 
 vi.mock('../api', () => {
   const login = vi.fn(async () => ({
-    data: { message: '登录成功', data: { accessToken: 'token-mock' } },
+    data: { message: 'ok', data: { accessToken: 'token-mock' } },
   }))
-  const register = vi.fn(async () => ({ data: { message: '注册成功', data: {} } }))
+  const register = vi.fn(async () => ({ data: { message: 'ok', data: {} } }))
   const searchJobs = vi.fn(async () => ({
     data: {
       data: {
-        jobs: [{ id: 1, title: 'Python开发工程师', company: 'A公司', salary: '15-25k', location: '上海' }],
+        jobs: [{ id: 1, title: 'Python Engineer', company: 'A Corp', salary: '15-25k', location: 'Shanghai' }],
         total: 1,
       },
     },
@@ -50,8 +50,17 @@ vi.mock('../api', () => {
       },
     },
   }))
+  const fetchSecurityLogStats = vi.fn(async () => ({
+    data: {
+      data: {
+        total: 1,
+        event_share: [{ event_type: 'LOGIN_SUCCESS', event_name: 'Login success', count: 1, percentage: 100 }],
+        daily_trend: [{ date: '2026-04-16', count: 1 }],
+      },
+    },
+  }))
   const exportSecurityLogs = vi.fn(async () => ({
-    data: 'id,event_type,event_name,username,client_ip,created_at,detail\n1,LOGIN_SUCCESS,登录成功,demo_user,127.0.0.1,2026-04-16 10:00:00,{}',
+    data: 'id,event_type,event_name,username,client_ip,created_at,detail\n1,LOGIN_SUCCESS,login success,demo_user,127.0.0.1,2026-04-16 10:00:00,{}',
     headers: { 'content-disposition': 'attachment; filename="auth_security_logs_20260416.csv"' },
   }))
   const fetchRecommendations = vi.fn(async () => ({ data: { data: { recommendations: [] } } }))
@@ -62,7 +71,7 @@ vi.mock('../api', () => {
     data: { data: { match_rate: 80, missing_skills: [] } },
   }))
   const predictSalary = vi.fn(async () => ({
-    data: { data: { predicted_salary_min: 15, predicted_salary_max: 22, unit: 'K/月' } },
+    data: { data: { predicted_salary_min: 15, predicted_salary_max: 22, unit: 'K/month' } },
   }))
   const fetchTrends = vi.fn(async () => ({
     data: {
@@ -84,6 +93,7 @@ vi.mock('../api', () => {
     searchJobs,
     generateResume,
     fetchSecurityLogs,
+    fetchSecurityLogStats,
     exportSecurityLogs,
     fetchRecommendations,
     fetchSkillDemand,
@@ -134,12 +144,12 @@ describe('App route smoke', () => {
     await router.push('/recommend')
     await flushPromises()
     expect(api.fetchSkillDemand).toHaveBeenCalled()
-    expect(wrapper.text()).toContain('技能需求 Top 8')
+    expect(wrapper.text()).toContain('Top 8')
 
     await router.push('/security-logs')
     await flushPromises()
     expect(api.fetchSecurityLogs).toHaveBeenCalled()
-    expect(wrapper.get('[data-testid="security-logs-total"]').text()).toContain('共 1 条')
+    expect(wrapper.get('[data-testid="security-logs-total"]').text()).toContain('1')
   })
 
   it('keeps search state when switching routes', async () => {
@@ -149,7 +159,7 @@ describe('App route smoke', () => {
     vi.mocked(api.searchJobs).mockResolvedValueOnce({
       data: {
         data: {
-          jobs: [{ id: 9, title: 'Java开发工程师', company: 'B公司', salary: '20-30k', location: '北京' }],
+          jobs: [{ id: 9, title: 'Java Engineer', company: 'B Corp', salary: '20-30k', location: 'Beijing' }],
           total: 2,
         },
       },

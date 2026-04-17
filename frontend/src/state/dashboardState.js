@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import {
   exportSecurityLogs,
   fetchSecurityLogs,
+  fetchSecurityLogStats,
   fetchRecommendations,
   fetchSkillDemand,
   fetchSkillMatch,
@@ -52,6 +53,8 @@ const createLoadingState = () => ({
   salary: false,
   trends: false,
   securityLogs: false,
+  securityLogsStats: false,
+  securityLogsPreview: false,
   securityLogsExport: false,
 })
 const createRequestState = () => ({
@@ -310,6 +313,13 @@ export const securityLogsTotal = ref(0)
 export const securityLogsPages = ref(0)
 export const securityLogsCurrent = ref(1)
 export const securityLogsPerPage = ref(20)
+export const securityLogStatsTotal = ref(0)
+export const securityLogStatsEventShare = ref([])
+export const securityLogStatsDailyTrend = ref([])
+export const securityLogExportPreview = ref([])
+export const securityLogExportPreviewTotal = ref(0)
+export const securityLogExportPreviewFetched = ref(false)
+export const securityLogFilterHistory = ref([])
 export const recommendations = ref([])
 export const skillDemand = ref([])
 export const skillMatch = ref(null)
@@ -325,6 +335,10 @@ export const loading = ref(createLoadingState())
 export const requestState = ref(createRequestState())
 
 const SECURITY_LOG_EXPORT_FILENAME = 'auth_security_logs.csv'
+const SECURITY_LOG_FILTER_STORAGE_KEY = 'dashboard.security_logs.filters.v1'
+const SECURITY_LOG_FILTER_HISTORY_STORAGE_KEY = 'dashboard.security_logs.filter_history.v1'
+const SECURITY_LOG_EXPORT_PREVIEW_LIMIT = 10
+const SECURITY_LOG_FILTER_HISTORY_LIMIT = 3
 
 const saveToken = (payload) => {
   const token = payload?.data?.accessToken
@@ -337,6 +351,138 @@ const toast = (text) => {
 
 const setLoading = (key, value) => {
   loading.value[key] = value
+}
+
+const canUseStorage = () => typeof window !== 'undefined' && !!window.localStorage
+
+const normalizeSecurityLogFilterSnapshot = (raw = {}) => {
+  const defaults = createSecurityLogForm()
+  const perPage = Number.parseInt(raw.per_page, 10)
+
+  return {
+    username: String(raw.username || '').trim(),
+    client_ip: String(raw.client_ip || '').trim(),
+    event_type: String(raw.event_type || '').trim(),
+    start_time: String(raw.start_time || '').trim(),
+    end_time: String(raw.end_time || '').trim(),
+    export_fields: String(raw.export_fields || '').trim().toLowerCase() === 'basic' ? 'basic' : 'full',
+    per_page: Number.isFinite(perPage) && perPage > 0 ? perPage : defaults.per_page,
+  }
+}
+
+const buildSecurityLogFilterSnapshot = () => {
+  return normalizeSecurityLogFilterSnapshot(securityLogForm.value)
+}
+
+const getSecurityLogFilterSignature = (snapshot) =>
+  JSON.stringify({
+    username: snapshot.username,
+    client_ip: snapshot.client_ip,
+    event_type: snapshot.event_type,
+    start_time: snapshot.start_time,
+    end_time: snapshot.end_time,
+    export_fields: snapshot.export_fields,
+    per_page: snapshot.per_page,
+  })
+
+const shouldRecordSecurityLogFilterHistory = (snapshot) => {
+  const defaults = normalizeSecurityLogFilterSnapshot(createSecurityLogForm())
+  return getSecurityLogFilterSignature(snapshot) !== getSecurityLogFilterSignature(defaults)
+}
+
+const saveSecurityLogFilterHistory = (snapshot) => {
+  if (!canUseStorage()) return
+  if (!shouldRecordSecurityLogFilterHistory(snapshot)) return
+  try {
+    const rawHistory = window.localStorage.getItem(SECURITY_LOG_FILTER_HISTORY_STORAGE_KEY)
+    const parsed = rawHistory ? JSON.parse(rawHistory) : []
+    const currentSignature = getSecurityLogFilterSignature(snapshot)
+
+    const normalizedHistory = Array.isArray(parsed)
+      ? parsed.map((item) => normalizeSecurityLogFilterSnapshot(item)).filter(Boolean)
+      : []
+
+    const deduped = normalizedHistory.filter((item) => getSecurityLogFilterSignature(item) !== currentSignature)
+    const nextHistory = [snapshot, ...deduped].slice(0, SECURITY_LOG_FILTER_HISTORY_LIMIT)
+    securityLogFilterHistory.value = nextHistory
+    window.localStorage.setItem(SECURITY_LOG_FILTER_HISTORY_STORAGE_KEY, JSON.stringify(nextHistory))
+  } catch {
+    // ignore local-storage failures in restricted environments
+  }
+}
+
+const persistSecurityLogFilters = () => {
+  const snapshot = buildSecurityLogFilterSnapshot()
+  if (!canUseStorage()) {
+    if (shouldRecordSecurityLogFilterHistory(snapshot)) {
+      securityLogFilterHistory.value = [snapshot, ...securityLogFilterHistory.value].slice(0, SECURITY_LOG_FILTER_HISTORY_LIMIT)
+    }
+    return
+  }
+
+  try {
+    window.localStorage.setItem(SECURITY_LOG_FILTER_STORAGE_KEY, JSON.stringify(snapshot))
+    saveSecurityLogFilterHistory(snapshot)
+  } catch {
+    // ignore local-storage failures in restricted environments
+  }
+}
+
+const clearPersistedSecurityLogFilters = () => {
+  if (!canUseStorage()) return
+  try {
+    window.localStorage.removeItem(SECURITY_LOG_FILTER_STORAGE_KEY)
+    window.localStorage.removeItem(SECURITY_LOG_FILTER_HISTORY_STORAGE_KEY)
+    securityLogFilterHistory.value = []
+  } catch {
+    // ignore local-storage failures in restricted environments
+  }
+}
+
+export const loadSecurityLogFilterHistoryFromStorage = () => {
+  if (!canUseStorage()) return false
+  try {
+    const raw = window.localStorage.getItem(SECURITY_LOG_FILTER_HISTORY_STORAGE_KEY)
+    if (!raw) {
+      securityLogFilterHistory.value = []
+      return false
+    }
+
+    const parsed = JSON.parse(raw)
+    const normalized = Array.isArray(parsed)
+      ? parsed.map((item) => normalizeSecurityLogFilterSnapshot(item)).filter(Boolean)
+      : []
+    securityLogFilterHistory.value = normalized.slice(0, SECURITY_LOG_FILTER_HISTORY_LIMIT)
+    return securityLogFilterHistory.value.length > 0
+  } catch {
+    securityLogFilterHistory.value = []
+    return false
+  }
+}
+
+export const applySecurityLogFilterSnapshot = (snapshot) => {
+  const normalized = normalizeSecurityLogFilterSnapshot(snapshot)
+  const defaults = createSecurityLogForm()
+  securityLogForm.value = {
+    ...defaults,
+    ...normalized,
+    page: 1,
+  }
+}
+
+export const restoreSecurityLogFiltersFromStorage = () => {
+  loadSecurityLogFilterHistoryFromStorage()
+  if (!canUseStorage()) return false
+  try {
+    const raw = window.localStorage.getItem(SECURITY_LOG_FILTER_STORAGE_KEY)
+    if (!raw) return false
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return false
+    applySecurityLogFilterSnapshot(parsed)
+    return true
+  } catch {
+    return false
+  }
 }
 
 const extractFileName = (contentDisposition, fallback = SECURITY_LOG_EXPORT_FILENAME) => {
@@ -352,9 +498,21 @@ const extractFileName = (contentDisposition, fallback = SECURITY_LOG_EXPORT_FILE
   return normalized || fallback
 }
 
-const buildSecurityLogParams = ({ includePagination, includeExportField = false }) => {
-  const page = Number.parseInt(securityLogForm.value.page, 10)
-  const perPage = Number.parseInt(securityLogForm.value.per_page, 10)
+const applySecurityLogStatsPayload = (payload = {}) => {
+  securityLogStatsTotal.value = Number(payload.total || 0)
+  securityLogStatsEventShare.value = Array.isArray(payload.event_share) ? payload.event_share : []
+  securityLogStatsDailyTrend.value = Array.isArray(payload.daily_trend) ? payload.daily_trend : []
+}
+
+const resetSecurityLogStats = () => {
+  securityLogStatsTotal.value = 0
+  securityLogStatsEventShare.value = []
+  securityLogStatsDailyTrend.value = []
+}
+
+const buildSecurityLogParams = ({ includePagination, includeExportField = false, page, perPage } = {}) => {
+  const currentPage = Number.parseInt(page ?? securityLogForm.value.page, 10)
+  const currentPerPage = Number.parseInt(perPage ?? securityLogForm.value.per_page, 10)
   const exportFields = String(securityLogForm.value.export_fields || 'full').trim().toLowerCase()
   const params = {
     username: String(securityLogForm.value.username || '').trim(),
@@ -364,8 +522,8 @@ const buildSecurityLogParams = ({ includePagination, includeExportField = false 
     end_time: String(securityLogForm.value.end_time || '').trim(),
   }
   if (includePagination) {
-    params.page = Number.isFinite(page) && page > 0 ? page : 1
-    params.per_page = Number.isFinite(perPage) && perPage > 0 ? perPage : 20
+    params.page = Number.isFinite(currentPage) && currentPage > 0 ? currentPage : 1
+    params.per_page = Number.isFinite(currentPerPage) && currentPerPage > 0 ? currentPerPage : 20
   }
   if (includeExportField) {
     params.fields = exportFields || 'full'
@@ -706,6 +864,18 @@ export const onFetchSecurityLogs = async () => {
     securityLogsPerPage.value = Number(payload.per_page || securityLogForm.value.per_page || 20)
     securityLogForm.value.page = securityLogsCurrent.value
     securityLogForm.value.per_page = securityLogsPerPage.value
+    setLoading('securityLogsStats', true)
+    try {
+      const { data: statsData } = await fetchSecurityLogStats(
+        buildSecurityLogParams({ includePagination: false, includeExportField: false }),
+      )
+      applySecurityLogStatsPayload(statsData?.data || {})
+    } catch {
+      resetSecurityLogStats()
+    } finally {
+      setLoading('securityLogsStats', false)
+    }
+    persistSecurityLogFilters()
     requestState.value.securityLogsFetched = true
     securityLogHint.value = null
     toast(`审计日志查询成功，共 ${securityLogsTotal.value} 条`)
@@ -715,6 +885,32 @@ export const onFetchSecurityLogs = async () => {
     toast(hint.message)
   } finally {
     setLoading('securityLogs', false)
+  }
+}
+
+export const onPreviewSecurityLogsExport = async () => {
+  setLoading('securityLogsPreview', true)
+  try {
+    const params = buildSecurityLogParams({
+      includePagination: true,
+      includeExportField: false,
+      page: 1,
+      perPage: SECURITY_LOG_EXPORT_PREVIEW_LIMIT,
+    })
+    const { data } = await fetchSecurityLogs(params)
+    const payload = data?.data || {}
+    securityLogExportPreview.value = payload.logs || []
+    securityLogExportPreviewTotal.value = Number(payload.total || 0)
+    securityLogExportPreviewFetched.value = true
+    securityLogHint.value = null
+    persistSecurityLogFilters()
+    toast(`已更新导出预览（前 ${SECURITY_LOG_EXPORT_PREVIEW_LIMIT} 条）`)
+  } catch (error) {
+    const hint = buildActionHint('securityLogs', error, '导出预览查询失败')
+    securityLogHint.value = hint
+    toast(hint.message)
+  } finally {
+    setLoading('securityLogsPreview', false)
   }
 }
 
@@ -739,6 +935,7 @@ export const onExportSecurityLogs = async () => {
     }
 
     securityLogHint.value = null
+    persistSecurityLogFilters()
     toast('审计日志导出成功')
   } catch (error) {
     const hint = buildActionHint('securityLogsExport', error, '审计日志导出失败')
@@ -764,8 +961,14 @@ export const resetSecurityLogFilters = () => {
   securityLogsPages.value = 0
   securityLogsCurrent.value = 1
   securityLogsPerPage.value = 20
+  resetSecurityLogStats()
+  securityLogExportPreview.value = []
+  securityLogExportPreviewTotal.value = 0
+  securityLogExportPreviewFetched.value = false
+  securityLogFilterHistory.value = []
   securityLogHint.value = null
   requestState.value.securityLogsFetched = false
+  clearPersistedSecurityLogFilters()
   toast('已重置审计日志筛选条件，请重新查询')
 }
 
@@ -784,6 +987,11 @@ export const resetDashboardState = () => {
   securityLogsPages.value = 0
   securityLogsCurrent.value = 1
   securityLogsPerPage.value = 20
+  resetSecurityLogStats()
+  securityLogExportPreview.value = []
+  securityLogExportPreviewTotal.value = 0
+  securityLogExportPreviewFetched.value = false
+  securityLogFilterHistory.value = []
   recommendations.value = []
   skillDemand.value = []
   skillMatch.value = null

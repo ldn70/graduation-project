@@ -1,6 +1,14 @@
 from django.urls import path
 
-from .views import DeleteAccountView, LoginView, ProfileView, RegisterView, SecurityLogExportView, SecurityLogListView
+from .views import (
+    DeleteAccountView,
+    LoginView,
+    ProfileView,
+    RegisterView,
+    SecurityLogExportView,
+    SecurityLogListView,
+    SecurityLogStatsView,
+)
 
 urlpatterns = [
     path("register", RegisterView.as_view(), name="user-register"),
@@ -8,5 +16,6 @@ urlpatterns = [
     path("profile", ProfileView.as_view(), name="user-profile"),
     path("delete", DeleteAccountView.as_view(), name="user-delete"),
     path("security-logs", SecurityLogListView.as_view(), name="user-security-logs"),
+    path("security-logs/stats", SecurityLogStatsView.as_view(), name="user-security-logs-stats"),
     path("security-logs/export", SecurityLogExportView.as_view(), name="user-security-logs-export"),
 ]
