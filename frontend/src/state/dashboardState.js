@@ -31,6 +31,12 @@ const createSecurityLogForm = () => ({
   event_type: '',
   start_time: '',
   end_time: '',
+  stats_granularity: 'day',
+  stats_event_compare_mode: 'selected',
+  stats_alert_preset: 'standard',
+  stats_alert_threshold: 30,
+  stats_anomaly_top_n: 5,
+  stats_drilldown_dimension: 'username',
   export_fields: 'full',
   page: 1,
   per_page: 20,
@@ -54,6 +60,7 @@ const createLoadingState = () => ({
   trends: false,
   securityLogs: false,
   securityLogsStats: false,
+  securityLogsStatsSnapshot: false,
   securityLogsPreview: false,
   securityLogsExport: false,
 })
@@ -189,6 +196,11 @@ const ERROR_CODE_HINTS = {
     prefix: '参数错误',
     message: () => 'event_type 参数不在支持范围内，请检查后重试。',
   },
+  USER_SECURITY_LOG_STATS_GRANULARITY_INVALID: {
+    level: 'warning',
+    prefix: '参数错误',
+    message: () => '统计粒度仅支持 day/week/month，请重新选择后重试。',
+  },
   USER_SECURITY_LOG_EXPORT_FIELDS_INVALID: {
     level: 'warning',
     prefix: '参数错误',
@@ -314,8 +326,14 @@ export const securityLogsPages = ref(0)
 export const securityLogsCurrent = ref(1)
 export const securityLogsPerPage = ref(20)
 export const securityLogStatsTotal = ref(0)
+export const securityLogStatsGranularity = ref('day')
 export const securityLogStatsEventShare = ref([])
+export const securityLogStatsAnomalyEventRank = ref([])
 export const securityLogStatsDailyTrend = ref([])
+export const securityLogStatsPreviousTrend = ref([])
+export const securityLogStatsPeriodComparison = ref(null)
+export const securityLogStatsDrilldownByUsername = ref([])
+export const securityLogStatsDrilldownByClientIp = ref([])
 export const securityLogExportPreview = ref([])
 export const securityLogExportPreviewTotal = ref(0)
 export const securityLogExportPreviewFetched = ref(false)
@@ -335,6 +353,7 @@ export const loading = ref(createLoadingState())
 export const requestState = ref(createRequestState())
 
 const SECURITY_LOG_EXPORT_FILENAME = 'auth_security_logs.csv'
+const SECURITY_LOG_STATS_SNAPSHOT_FILENAME = 'auth_security_log_stats_snapshot'
 const SECURITY_LOG_FILTER_STORAGE_KEY = 'dashboard.security_logs.filters.v1'
 const SECURITY_LOG_FILTER_HISTORY_STORAGE_KEY = 'dashboard.security_logs.filter_history.v1'
 const SECURITY_LOG_EXPORT_PREVIEW_LIMIT = 10
@@ -358,6 +377,23 @@ const canUseStorage = () => typeof window !== 'undefined' && !!window.localStora
 const normalizeSecurityLogFilterSnapshot = (raw = {}) => {
   const defaults = createSecurityLogForm()
   const perPage = Number.parseInt(raw.per_page, 10)
+  const parsedAlertThreshold = (() => {
+    const parsed = Number.parseInt(raw.stats_alert_threshold, 10)
+    if (!Number.isFinite(parsed)) return defaults.stats_alert_threshold
+    if (parsed < 0) return 0
+    if (parsed > 100) return 100
+    return parsed
+  })()
+  const parsedAlertPreset = (() => {
+    const rawPreset = String(raw.stats_alert_preset || '').trim().toLowerCase()
+    if (['relaxed', 'standard', 'strict', 'custom'].includes(rawPreset)) {
+      return rawPreset
+    }
+    if (parsedAlertThreshold === 20) return 'relaxed'
+    if (parsedAlertThreshold === 30) return 'standard'
+    if (parsedAlertThreshold === 50) return 'strict'
+    return 'custom'
+  })()
 
   return {
     username: String(raw.username || '').trim(),
@@ -365,6 +401,28 @@ const normalizeSecurityLogFilterSnapshot = (raw = {}) => {
     event_type: String(raw.event_type || '').trim(),
     start_time: String(raw.start_time || '').trim(),
     end_time: String(raw.end_time || '').trim(),
+    stats_granularity: ['day', 'week', 'month'].includes(String(raw.stats_granularity || '').trim().toLowerCase())
+      ? String(raw.stats_granularity || '').trim().toLowerCase()
+      : defaults.stats_granularity,
+    stats_event_compare_mode: ['selected', 'all'].includes(
+      String(raw.stats_event_compare_mode || '').trim().toLowerCase(),
+    )
+      ? String(raw.stats_event_compare_mode || '').trim().toLowerCase()
+      : defaults.stats_event_compare_mode,
+    stats_alert_preset: parsedAlertPreset,
+    stats_alert_threshold: parsedAlertThreshold,
+    stats_anomaly_top_n: (() => {
+      const parsed = Number.parseInt(raw.stats_anomaly_top_n, 10)
+      if (!Number.isFinite(parsed)) return defaults.stats_anomaly_top_n
+      if (parsed < 1) return 1
+      if (parsed > 10) return 10
+      return parsed
+    })(),
+    stats_drilldown_dimension: ['username', 'client_ip'].includes(
+      String(raw.stats_drilldown_dimension || '').trim().toLowerCase(),
+    )
+      ? String(raw.stats_drilldown_dimension || '').trim().toLowerCase()
+      : defaults.stats_drilldown_dimension,
     export_fields: String(raw.export_fields || '').trim().toLowerCase() === 'basic' ? 'basic' : 'full',
     per_page: Number.isFinite(perPage) && perPage > 0 ? perPage : defaults.per_page,
   }
@@ -381,6 +439,12 @@ const getSecurityLogFilterSignature = (snapshot) =>
     event_type: snapshot.event_type,
     start_time: snapshot.start_time,
     end_time: snapshot.end_time,
+    stats_granularity: snapshot.stats_granularity,
+    stats_event_compare_mode: snapshot.stats_event_compare_mode,
+    stats_alert_preset: snapshot.stats_alert_preset,
+    stats_alert_threshold: snapshot.stats_alert_threshold,
+    stats_anomaly_top_n: snapshot.stats_anomaly_top_n,
+    stats_drilldown_dimension: snapshot.stats_drilldown_dimension,
     export_fields: snapshot.export_fields,
     per_page: snapshot.per_page,
   })
@@ -500,17 +564,47 @@ const extractFileName = (contentDisposition, fallback = SECURITY_LOG_EXPORT_FILE
 
 const applySecurityLogStatsPayload = (payload = {}) => {
   securityLogStatsTotal.value = Number(payload.total || 0)
+  securityLogStatsGranularity.value = ['day', 'week', 'month'].includes(payload.granularity)
+    ? payload.granularity
+    : securityLogForm.value.stats_granularity
   securityLogStatsEventShare.value = Array.isArray(payload.event_share) ? payload.event_share : []
-  securityLogStatsDailyTrend.value = Array.isArray(payload.daily_trend) ? payload.daily_trend : []
+  securityLogStatsAnomalyEventRank.value = Array.isArray(payload.anomaly_event_rank) ? payload.anomaly_event_rank : []
+  securityLogStatsDailyTrend.value = Array.isArray(payload.time_trend)
+    ? payload.time_trend
+    : Array.isArray(payload.daily_trend)
+      ? payload.daily_trend
+      : []
+  const trendComparison = payload.trend_comparison || {}
+  securityLogStatsPreviousTrend.value = Array.isArray(trendComparison.previous) ? trendComparison.previous : []
+  securityLogStatsPeriodComparison.value =
+    payload.period_comparison && typeof payload.period_comparison === 'object'
+      ? payload.period_comparison
+      : null
+  const drilldown = payload.drilldown || {}
+  securityLogStatsDrilldownByUsername.value = Array.isArray(drilldown.by_username) ? drilldown.by_username : []
+  securityLogStatsDrilldownByClientIp.value = Array.isArray(drilldown.by_client_ip) ? drilldown.by_client_ip : []
 }
 
 const resetSecurityLogStats = () => {
   securityLogStatsTotal.value = 0
+  securityLogStatsGranularity.value = 'day'
   securityLogStatsEventShare.value = []
+  securityLogStatsAnomalyEventRank.value = []
   securityLogStatsDailyTrend.value = []
+  securityLogStatsPreviousTrend.value = []
+  securityLogStatsPeriodComparison.value = null
+  securityLogStatsDrilldownByUsername.value = []
+  securityLogStatsDrilldownByClientIp.value = []
 }
 
-const buildSecurityLogParams = ({ includePagination, includeExportField = false, page, perPage } = {}) => {
+const buildSecurityLogParams = ({
+  includePagination,
+  includeExportField = false,
+  includeStatsGranularity = false,
+  includeEventType = true,
+  page,
+  perPage,
+} = {}) => {
   const currentPage = Number.parseInt(page ?? securityLogForm.value.page, 10)
   const currentPerPage = Number.parseInt(perPage ?? securityLogForm.value.per_page, 10)
   const exportFields = String(securityLogForm.value.export_fields || 'full').trim().toLowerCase()
@@ -527,6 +621,13 @@ const buildSecurityLogParams = ({ includePagination, includeExportField = false,
   }
   if (includeExportField) {
     params.fields = exportFields || 'full'
+  }
+  if (includeStatsGranularity) {
+    const statsGranularity = String(securityLogForm.value.stats_granularity || '').trim().toLowerCase()
+    params.granularity = ['day', 'week', 'month'].includes(statsGranularity) ? statsGranularity : 'day'
+  }
+  if (!includeEventType) {
+    delete params.event_type
   }
 
   return Object.fromEntries(
@@ -866,8 +967,14 @@ export const onFetchSecurityLogs = async () => {
     securityLogForm.value.per_page = securityLogsPerPage.value
     setLoading('securityLogsStats', true)
     try {
+      const statsCompareMode = String(securityLogForm.value.stats_event_compare_mode || 'selected').trim().toLowerCase()
       const { data: statsData } = await fetchSecurityLogStats(
-        buildSecurityLogParams({ includePagination: false, includeExportField: false }),
+        buildSecurityLogParams({
+          includePagination: false,
+          includeExportField: false,
+          includeStatsGranularity: true,
+          includeEventType: statsCompareMode !== 'all',
+        }),
       )
       applySecurityLogStatsPayload(statsData?.data || {})
     } catch {
@@ -943,6 +1050,63 @@ export const onExportSecurityLogs = async () => {
     toast(hint.message)
   } finally {
     setLoading('securityLogsExport', false)
+  }
+}
+
+export const onExportSecurityLogStatsSnapshot = async () => {
+  setLoading('securityLogsStatsSnapshot', true)
+  try {
+    const snapshot = {
+      exported_at: new Date().toISOString(),
+      filters: buildSecurityLogFilterSnapshot(),
+      stats: {
+        total: securityLogStatsTotal.value,
+        granularity: securityLogStatsGranularity.value,
+        event_share: securityLogStatsEventShare.value,
+        anomaly_event_rank: securityLogStatsAnomalyEventRank.value,
+        time_trend: securityLogStatsDailyTrend.value,
+        trend_comparison: {
+          current: securityLogStatsDailyTrend.value,
+          previous: securityLogStatsPreviousTrend.value,
+        },
+        period_comparison: securityLogStatsPeriodComparison.value,
+        drilldown: {
+          by_username: securityLogStatsDrilldownByUsername.value,
+          by_client_ip: securityLogStatsDrilldownByClientIp.value,
+        },
+      },
+    }
+    const fileName = `${SECURITY_LOG_STATS_SNAPSHOT_FILENAME}_${new Date()
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\..+/, '')}.json`
+    const jsonText = JSON.stringify(snapshot, null, 2)
+
+    if (typeof window !== 'undefined' && window.URL && typeof document !== 'undefined') {
+      const blob = new Blob([jsonText], { type: 'application/json;charset=utf-8;' })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = fileName
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+    }
+
+    securityLogHint.value = null
+    persistSecurityLogFilters()
+    toast('统计快照导出成功')
+  } catch {
+    securityLogHint.value = {
+      level: 'error',
+      message: '统计快照导出失败，请稍后重试。',
+      showLogin: false,
+      showRetry: false,
+    }
+    toast('统计快照导出失败，请稍后重试。')
+  } finally {
+    setLoading('securityLogsStatsSnapshot', false)
   }
 }
 

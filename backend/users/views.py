@@ -1,12 +1,13 @@
 """API views for user management."""
 
+from calendar import monthrange
 import csv
 import json
 from datetime import datetime, time, timedelta
 
 from django.contrib.auth import authenticate
-from django.db.models import Count
-from django.db.models.functions import TruncDate
+from django.db.models import Count, Q
+from django.db.models.functions import TruncDate, TruncMonth, TruncWeek
 from django.core.paginator import Paginator
 from django.http import HttpResponse
 from django.utils import timezone
@@ -35,6 +36,13 @@ from .serializers import (
 SECURITY_LOG_EXPORT_MAX_ROWS = 5000
 SECURITY_LOG_EVENT_TYPES = {choice[0] for choice in AuthSecurityLog.EVENT_CHOICES}
 SECURITY_LOG_EXPORT_FIELD_MODES = {"basic", "full"}
+SECURITY_LOG_STATS_GRANULARITIES = {"day", "week", "month"}
+SECURITY_LOG_STATS_DRILLDOWN_LIMIT = 10
+SECURITY_LOG_ANOMALY_EVENTS = {
+    AuthSecurityLog.EVENT_LOGIN_FAILED,
+    AuthSecurityLog.EVENT_LOGIN_LOCK_TRIGGERED,
+    AuthSecurityLog.EVENT_LOGIN_LOCK_BLOCKED,
+}
 
 
 def _parse_security_log_datetime(raw_value, *, param_name, error_code, is_end=False):
@@ -68,7 +76,18 @@ def _parse_security_log_datetime(raw_value, *, param_name, error_code, is_end=Fa
     return parsed, parsed_from_date, None
 
 
-def _build_security_log_queryset(request):
+def _build_security_log_base_queryset(*, username="", client_ip="", event_type=""):
+    queryset = AuthSecurityLog.objects.all()
+    if username:
+        queryset = queryset.filter(username__icontains=username)
+    if client_ip:
+        queryset = queryset.filter(client_ip=client_ip)
+    if event_type:
+        queryset = queryset.filter(event_type=event_type)
+    return queryset
+
+
+def _build_security_log_queryset(request, *, include_meta=False):
     username = request.GET.get("username", "").strip().lower()
     client_ip = request.GET.get("client_ip", "").strip()
     event_type = request.GET.get("event_type", "").strip().upper()
@@ -79,6 +98,8 @@ def _build_security_log_queryset(request):
         is_end=False,
     )
     if start_error:
+        if include_meta:
+            return None, start_error, None
         return None, start_error
 
     end_time, end_from_date_only, end_error = _parse_security_log_datetime(
@@ -88,10 +109,12 @@ def _build_security_log_queryset(request):
         is_end=True,
     )
     if end_error:
+        if include_meta:
+            return None, end_error, None
         return None, end_error
 
     if event_type and event_type not in SECURITY_LOG_EVENT_TYPES:
-        return (
+        result = (
             None,
             error_response(
                 "event_type 参数不在支持范围内",
@@ -99,10 +122,13 @@ def _build_security_log_queryset(request):
                 code="USER_SECURITY_LOG_EVENT_TYPE_INVALID",
             ),
         )
+        if include_meta:
+            return result[0], result[1], None
+        return result
 
     if start_time and end_time:
         if end_from_date_only and start_time >= end_time:
-            return (
+            result = (
                 None,
                 error_response(
                     "start_time 不能晚于 end_time",
@@ -110,8 +136,11 @@ def _build_security_log_queryset(request):
                     code="USER_SECURITY_LOG_TIME_RANGE_INVALID",
                 ),
             )
+            if include_meta:
+                return result[0], result[1], None
+            return result
         if not end_from_date_only and start_time > end_time:
-            return (
+            result = (
                 None,
                 error_response(
                     "start_time 不能晚于 end_time",
@@ -119,14 +148,15 @@ def _build_security_log_queryset(request):
                     code="USER_SECURITY_LOG_TIME_RANGE_INVALID",
                 ),
             )
+            if include_meta:
+                return result[0], result[1], None
+            return result
 
-    queryset = AuthSecurityLog.objects.all()
-    if username:
-        queryset = queryset.filter(username__icontains=username)
-    if client_ip:
-        queryset = queryset.filter(client_ip=client_ip)
-    if event_type:
-        queryset = queryset.filter(event_type=event_type)
+    queryset = _build_security_log_base_queryset(
+        username=username,
+        client_ip=client_ip,
+        event_type=event_type,
+    )
     if start_time:
         queryset = queryset.filter(created_at__gte=start_time)
     if end_time:
@@ -134,7 +164,135 @@ def _build_security_log_queryset(request):
             queryset = queryset.filter(created_at__lt=end_time)
         else:
             queryset = queryset.filter(created_at__lte=end_time)
+    filter_meta = {
+        "username": username,
+        "client_ip": client_ip,
+        "event_type": event_type,
+        "start_time": start_time,
+        "end_time": end_time,
+        "end_from_date_only": end_from_date_only,
+    }
+    if include_meta:
+        return queryset, None, filter_meta
     return queryset, None
+
+
+def _parse_security_log_stats_granularity(request):
+    granularity = str(request.GET.get("granularity", "day") or "").strip().lower() or "day"
+    if granularity not in SECURITY_LOG_STATS_GRANULARITIES:
+        return (
+            None,
+            error_response(
+                "granularity 参数仅支持 day|week|month",
+                400,
+                code="USER_SECURITY_LOG_STATS_GRANULARITY_INVALID",
+            ),
+        )
+    return granularity, None
+
+
+def _normalize_security_log_bucket_date(bucket, tz):
+    if bucket is None:
+        return None
+    if isinstance(bucket, datetime):
+        if timezone.is_naive(bucket):
+            bucket = timezone.make_aware(bucket, tz)
+        return timezone.localtime(bucket, tz).date()
+    return bucket
+
+
+def _format_security_log_bucket(bucket_date, granularity):
+    if bucket_date is None:
+        return ""
+    if granularity == "month":
+        return bucket_date.strftime("%Y-%m")
+    return bucket_date.isoformat()
+
+
+def _get_security_log_trunc(granularity, tz):
+    if granularity == "week":
+        return TruncWeek("created_at", tzinfo=tz)
+    if granularity == "month":
+        return TruncMonth("created_at", tzinfo=tz)
+    return TruncDate("created_at", tzinfo=tz)
+
+
+def _build_security_log_trend_rows(queryset, *, granularity, tz):
+    rows = (
+        queryset.annotate(period_bucket=_get_security_log_trunc(granularity, tz))
+        .values("period_bucket")
+        .annotate(count=Count("id"))
+        .order_by("period_bucket")
+    )
+    trend_rows = []
+    for row in rows:
+        bucket_date = _normalize_security_log_bucket_date(row["period_bucket"], tz)
+        if bucket_date is None:
+            continue
+        trend_rows.append(
+            {
+                "bucket_date": bucket_date,
+                "period": _format_security_log_bucket(bucket_date, granularity),
+                "count": row["count"],
+            }
+        )
+    return trend_rows
+
+
+def _add_months(base_date, months):
+    month_index = base_date.month - 1 + months
+    year = base_date.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(base_date.day, monthrange(year, month)[1])
+    return base_date.replace(year=year, month=month, day=day)
+
+
+def _shift_bucket_date_for_comparison(bucket_date, *, granularity, current_start, previous_start, tz):
+    current_start_date = timezone.localtime(current_start, tz).date()
+    previous_start_date = timezone.localtime(previous_start, tz).date()
+
+    if granularity == "month":
+        month_delta = (
+            (current_start_date.year - previous_start_date.year) * 12
+            + (current_start_date.month - previous_start_date.month)
+        )
+        return _add_months(bucket_date, month_delta)
+
+    day_delta = (current_start_date - previous_start_date).days
+    return bucket_date + timedelta(days=day_delta)
+
+
+def _to_local_iso(value, tz):
+    return timezone.localtime(value, tz).isoformat(timespec="seconds")
+
+
+def _build_security_log_drilldown_rows(queryset, *, field_name, total):
+    rows = (
+        queryset.exclude(**{f"{field_name}__isnull": True})
+        .values(field_name)
+        .annotate(
+            total_count=Count("id"),
+            anomaly_count=Count("id", filter=Q(event_type__in=SECURITY_LOG_ANOMALY_EVENTS)),
+        )
+        .order_by("-anomaly_count", "-total_count", field_name)[:SECURITY_LOG_STATS_DRILLDOWN_LIMIT]
+    )
+    result = []
+    for row in rows:
+        key = row[field_name]
+        if key in ("", None):
+            continue
+        total_count = row["total_count"]
+        anomaly_count = row["anomaly_count"]
+        result.append(
+            {
+                "key": key,
+                "total_count": total_count,
+                "anomaly_count": anomaly_count,
+                "share_percentage": round((total_count / total * 100), 2) if total else 0,
+                "anomaly_percentage": round((anomaly_count / total_count * 100), 2) if total_count else 0,
+            }
+        )
+    return result
 
 
 class RegisterView(APIView):
@@ -368,9 +526,13 @@ class SecurityLogStatsView(APIView):
     throttle_scope = "auth_security_logs"
 
     def get(self, request):
-        queryset, error = _build_security_log_queryset(request)
+        queryset, error, filter_meta = _build_security_log_queryset(request, include_meta=True)
         if error:
             return error
+
+        granularity, granularity_error = _parse_security_log_stats_granularity(request)
+        if granularity_error:
+            return granularity_error
 
         total = queryset.count()
         choice_map = dict(AuthSecurityLog.EVENT_CHOICES)
@@ -389,27 +551,130 @@ class SecurityLogStatsView(APIView):
             }
             for row in event_share_rows
         ]
+        anomaly_event_rank = [
+            row for row in event_share if row["event_type"] in SECURITY_LOG_ANOMALY_EVENTS
+        ]
+        anomaly_event_rank.sort(key=lambda item: (-item["count"], item["event_type"]))
+
+        drilldown_by_username = _build_security_log_drilldown_rows(
+            queryset,
+            field_name="username",
+            total=total,
+        )
+        drilldown_by_client_ip = _build_security_log_drilldown_rows(
+            queryset,
+            field_name="client_ip",
+            total=total,
+        )
 
         tz = timezone.get_current_timezone()
-        trend_rows = (
-            queryset.annotate(date=TruncDate("created_at", tzinfo=tz))
-            .values("date")
-            .annotate(count=Count("id"))
-            .order_by("date")
-        )
-        daily_trend = [
-            {
-                "date": row["date"].isoformat() if row["date"] else "",
-                "count": row["count"],
-            }
-            for row in trend_rows
-        ]
+        current_trend_rows = _build_security_log_trend_rows(queryset, granularity=granularity, tz=tz)
+        time_trend = [{"period": row["period"], "count": row["count"]} for row in current_trend_rows]
+        daily_trend = [{"date": row["period"], "count": row["count"]} for row in current_trend_rows]
+
+        period_comparison = {
+            "enabled": False,
+            "current": {
+                "total": total,
+            },
+            "previous": {
+                "total": 0,
+            },
+            "change": {
+                "count": 0,
+                "percentage": 0,
+            },
+        }
+        trend_comparison = {"current": time_trend, "previous": []}
+
+        start_time = filter_meta.get("start_time")
+        end_time = filter_meta.get("end_time")
+        end_from_date_only = bool(filter_meta.get("end_from_date_only"))
+        if start_time and end_time:
+            current_end_exclusive = end_time if end_from_date_only else end_time + timedelta(microseconds=1)
+            if current_end_exclusive > start_time:
+                period_span = current_end_exclusive - start_time
+                previous_start = start_time - period_span
+                previous_end_exclusive = start_time
+
+                previous_queryset = _build_security_log_base_queryset(
+                    username=filter_meta.get("username", ""),
+                    client_ip=filter_meta.get("client_ip", ""),
+                    event_type=filter_meta.get("event_type", ""),
+                ).filter(created_at__gte=previous_start, created_at__lt=previous_end_exclusive)
+
+                previous_total = previous_queryset.count()
+                delta_count = total - previous_total
+                delta_percentage = round((delta_count / previous_total) * 100, 2) if previous_total else (100 if total else 0)
+
+                previous_trend_rows = _build_security_log_trend_rows(
+                    previous_queryset,
+                    granularity=granularity,
+                    tz=tz,
+                )
+
+                current_labels = [row["period"] for row in current_trend_rows]
+                previous_aligned = {}
+                for row in previous_trend_rows:
+                    shifted_bucket = _shift_bucket_date_for_comparison(
+                        row["bucket_date"],
+                        granularity=granularity,
+                        current_start=start_time,
+                        previous_start=previous_start,
+                        tz=tz,
+                    )
+                    shifted_label = _format_security_log_bucket(shifted_bucket, granularity)
+                    previous_aligned[shifted_label] = previous_aligned.get(shifted_label, 0) + row["count"]
+
+                aligned_previous_trend = [
+                    {"period": label, "count": previous_aligned.get(label, 0)}
+                    for label in current_labels
+                ]
+                if not aligned_previous_trend and previous_aligned:
+                    aligned_previous_trend = [
+                        {"period": label, "count": previous_aligned[label]}
+                        for label in sorted(previous_aligned.keys())
+                    ]
+
+                current_end_display = end_time - timedelta(seconds=1) if end_from_date_only else end_time
+                previous_end_display = previous_end_exclusive - timedelta(seconds=1)
+                period_comparison = {
+                    "enabled": True,
+                    "current": {
+                        "total": total,
+                        "start_time": _to_local_iso(start_time, tz),
+                        "end_time": _to_local_iso(current_end_display, tz),
+                    },
+                    "previous": {
+                        "total": previous_total,
+                        "start_time": _to_local_iso(previous_start, tz),
+                        "end_time": _to_local_iso(previous_end_display, tz),
+                    },
+                    "change": {
+                        "count": delta_count,
+                        "percentage": delta_percentage,
+                    },
+                }
+                trend_comparison = {
+                    "current": time_trend,
+                    "previous": aligned_previous_trend,
+                }
 
         return success_response(
             {
                 "total": total,
+                "granularity": granularity,
                 "event_share": event_share,
+                "anomaly_event_rank": anomaly_event_rank,
+                "time_trend": time_trend,
+                # Backward compatible alias for existing consumers/tests.
                 "daily_trend": daily_trend,
+                "period_comparison": period_comparison,
+                "trend_comparison": trend_comparison,
+                "drilldown": {
+                    "by_username": drilldown_by_username,
+                    "by_client_ip": drilldown_by_client_ip,
+                },
             },
             "统计成功",
         )

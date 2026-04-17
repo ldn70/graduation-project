@@ -331,12 +331,92 @@ class UserApiTests(APITestCase):
         self.assertEqual(trend[0]["count"], 1)
         self.assertEqual(trend[1]["count"], 2)
 
+        anomaly_rank = resp.data["data"]["anomaly_event_rank"]
+        self.assertEqual(len(anomaly_rank), 1)
+        self.assertEqual(anomaly_rank[0]["event_type"], AuthSecurityLog.EVENT_LOGIN_FAILED)
+        self.assertEqual(anomaly_rank[0]["count"], 1)
+
+        drilldown = resp.data["data"]["drilldown"]
+        self.assertEqual(drilldown["by_username"][0]["key"], "alice")
+        self.assertEqual(drilldown["by_username"][0]["total_count"], 3)
+        self.assertEqual(drilldown["by_username"][0]["anomaly_count"], 1)
+        self.assertEqual(drilldown["by_client_ip"][0]["key"], "127.0.0.1")
+        self.assertEqual(drilldown["by_client_ip"][0]["total_count"], 2)
+        self.assertEqual(drilldown["by_client_ip"][0]["anomaly_count"], 1)
+
     def test_security_logs_stats_invalid_time_filters_return_error_codes(self):
         viewer = User.objects.create_user(username="stats_time_validation_viewer", password="12345678")
         self.client.force_authenticate(user=viewer)
         bad_start = self.client.get("/api/users/security-logs/stats", {"start_time": "not-a-time"})
         self.assertEqual(bad_start.status_code, 400)
         self.assertEqual(bad_start.data.get("code"), "USER_SECURITY_LOG_START_TIME_INVALID")
+
+    def test_security_logs_stats_invalid_granularity_code(self):
+        viewer = User.objects.create_user(username="stats_granularity_viewer", password="12345678")
+        self.client.force_authenticate(user=viewer)
+        resp = self.client.get("/api/users/security-logs/stats", {"granularity": "hour"})
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data.get("code"), "USER_SECURITY_LOG_STATS_GRANULARITY_INVALID")
+
+    def test_security_logs_stats_supports_granularity_and_period_comparison(self):
+        viewer = User.objects.create_user(username="stats_compare_viewer", password="12345678")
+        base_time = timezone.now().replace(hour=12, minute=0, second=0, microsecond=0)
+
+        current_first = AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_SUCCESS,
+            detail={},
+        )
+        current_second = AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_FAILED,
+            detail={},
+        )
+        previous_hit = AuthSecurityLog.objects.create(
+            username="alice",
+            client_ip="127.0.0.1",
+            event_type=AuthSecurityLog.EVENT_LOGIN_FAILED,
+            detail={},
+        )
+        AuthSecurityLog.objects.create(
+            username="bob",
+            client_ip="10.0.0.8",
+            event_type=AuthSecurityLog.EVENT_LOGIN_LOCK_TRIGGERED,
+            detail={},
+        )
+
+        AuthSecurityLog.objects.filter(pk=current_first.pk).update(created_at=base_time - timedelta(days=6))
+        AuthSecurityLog.objects.filter(pk=current_second.pk).update(created_at=base_time - timedelta(days=1))
+        AuthSecurityLog.objects.filter(pk=previous_hit.pk).update(created_at=base_time - timedelta(days=10))
+
+        self.client.force_authenticate(user=viewer)
+        resp = self.client.get(
+            "/api/users/security-logs/stats",
+            {
+                "username": "alice",
+                "start_time": (base_time - timedelta(days=7)).date().isoformat(),
+                "end_time": base_time.date().isoformat(),
+                "granularity": "week",
+            },
+        )
+        self.assertEqual(resp.status_code, 200)
+        data = resp.data["data"]
+        self.assertEqual(data["granularity"], "week")
+        self.assertEqual(data["total"], 2)
+        self.assertGreaterEqual(len(data["time_trend"]), 1)
+        self.assertIn("period", data["time_trend"][0])
+
+        comparison = data["period_comparison"]
+        self.assertTrue(comparison["enabled"])
+        self.assertEqual(comparison["current"]["total"], 2)
+        self.assertEqual(comparison["previous"]["total"], 1)
+        self.assertEqual(comparison["change"]["count"], 1)
+        self.assertEqual(comparison["change"]["percentage"], 100.0)
+
+        trend_comparison = data["trend_comparison"]
+        self.assertEqual(len(trend_comparison["current"]), len(trend_comparison["previous"]))
 
     def test_security_logs_export_csv(self):
         viewer = User.objects.create_user(username="export_viewer", password="12345678")

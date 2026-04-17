@@ -5,6 +5,7 @@ import {
   applySecurityLogFilterSnapshot,
   loadSecurityLogFilterHistoryFromStorage,
   loading,
+  onExportSecurityLogStatsSnapshot,
   onExportSecurityLogs,
   onFetchSecurityLogs,
   onPreviewSecurityLogsExport,
@@ -17,8 +18,14 @@ import {
   securityLogFilterHistory,
   securityLogForm,
   securityLogHint,
+  securityLogStatsAnomalyEventRank,
+  securityLogStatsDrilldownByClientIp,
+  securityLogStatsDrilldownByUsername,
   securityLogStatsDailyTrend,
   securityLogStatsEventShare,
+  securityLogStatsGranularity,
+  securityLogStatsPeriodComparison,
+  securityLogStatsPreviousTrend,
   securityLogs,
   securityLogsCurrent,
   securityLogsPages,
@@ -38,6 +45,24 @@ const eventTypeOptions = [
 const eventTypeLabelMap = Object.fromEntries(
   eventTypeOptions.filter((item) => item.value).map((item) => [item.value, item.label]),
 )
+const granularityOptions = [
+  { value: 'day', label: '按日' },
+  { value: 'week', label: '按周' },
+  { value: 'month', label: '按月' },
+]
+const compareModeOptions = [
+  { value: 'selected', label: '单选事件口径' },
+  { value: 'all', label: '全部事件口径' },
+]
+const alertPresetOptions = [
+  { value: 'relaxed', label: '宽松 20%', threshold: 20 },
+  { value: 'standard', label: '标准 30%', threshold: 30 },
+  { value: 'strict', label: '严格 50%', threshold: 50 },
+]
+const drilldownDimensionOptions = [
+  { value: 'username', label: '账号维度' },
+  { value: 'client_ip', label: 'IP 维度' },
+]
 
 const copiedLogId = ref(null)
 const eventShareChartRef = ref(null)
@@ -67,6 +92,60 @@ const showPreviewEmpty = computed(
 const hasFilterHistory = computed(
   () => Array.isArray(securityLogFilterHistory.value) && securityLogFilterHistory.value.length > 0,
 )
+const hasPeriodComparison = computed(() => !!securityLogStatsPeriodComparison.value?.enabled)
+const periodComparisonSummary = computed(() => {
+  const comparison = securityLogStatsPeriodComparison.value
+  if (!comparison?.enabled) return ''
+  const currentTotal = Number(comparison?.current?.total || 0)
+  const previousTotal = Number(comparison?.previous?.total || 0)
+  const deltaCount = Number(comparison?.change?.count || 0)
+  const deltaPercentage = Number(comparison?.change?.percentage || 0)
+  const deltaPrefix = deltaCount > 0 ? '+' : ''
+  return `本周期 ${currentTotal} 条，上周期 ${previousTotal} 条，变化 ${deltaPrefix}${deltaCount}（${deltaPrefix}${deltaPercentage}%）`
+})
+const periodComparisonRange = computed(() => {
+  const comparison = securityLogStatsPeriodComparison.value
+  if (!comparison?.enabled) return ''
+  const currentStart = String(comparison?.current?.start_time || '').trim()
+  const currentEnd = String(comparison?.current?.end_time || '').trim()
+  const previousStart = String(comparison?.previous?.start_time || '').trim()
+  const previousEnd = String(comparison?.previous?.end_time || '').trim()
+  if (!currentStart || !currentEnd || !previousStart || !previousEnd) return ''
+  return `本周期：${currentStart} ~ ${currentEnd}；上周期：${previousStart} ~ ${previousEnd}`
+})
+const alertThreshold = computed(() => {
+  const raw = Number.parseInt(securityLogForm.value.stats_alert_threshold, 10)
+  if (!Number.isFinite(raw)) return 30
+  if (raw < 0) return 0
+  if (raw > 100) return 100
+  return raw
+})
+const eventShareAlertSummary = computed(() => {
+  const rows = Array.isArray(securityLogStatsEventShare.value) ? securityLogStatsEventShare.value : []
+  const hitCount = rows.filter((row) => Number(row.percentage || 0) >= alertThreshold.value).length
+  if (!rows.length) {
+    return `当前无可统计事件。阈值 ${alertThreshold.value}%`
+  }
+  return `阈值 ${alertThreshold.value}%：${hitCount} 类事件达到或超过高亮阈值（共 ${rows.length} 类）。`
+})
+const anomalyTopN = computed(() => {
+  const raw = Number.parseInt(securityLogForm.value.stats_anomaly_top_n, 10)
+  if (!Number.isFinite(raw)) return 5
+  if (raw < 1) return 1
+  if (raw > 10) return 10
+  return raw
+})
+const anomalyTopNRows = computed(() => {
+  const rows = Array.isArray(securityLogStatsAnomalyEventRank.value) ? securityLogStatsAnomalyEventRank.value : []
+  return rows.slice(0, anomalyTopN.value)
+})
+const drilldownRows = computed(() => {
+  const dimension = String(securityLogForm.value.stats_drilldown_dimension || 'username').trim().toLowerCase()
+  if (dimension === 'client_ip') {
+    return Array.isArray(securityLogStatsDrilldownByClientIp.value) ? securityLogStatsDrilldownByClientIp.value : []
+  }
+  return Array.isArray(securityLogStatsDrilldownByUsername.value) ? securityLogStatsDrilldownByUsername.value : []
+})
 
 const formatDateTimeLocal = (date) => {
   const pad = (num) => String(num).padStart(2, '0')
@@ -99,20 +178,40 @@ const formatFilterHistoryLabel = (snapshot, index) => {
   return parts.length ? `#${index + 1} ${parts.join(' | ')}` : `#${index + 1} last filter`
 }
 
+const getGranularityLabel = (value) => {
+  const hit = granularityOptions.find((item) => item.value === value)
+  return hit ? hit.label : value
+}
+
 const buildEventShareSeries = () => {
   const rows = Array.isArray(securityLogStatsEventShare.value) ? securityLogStatsEventShare.value : []
+  const threshold = alertThreshold.value
   return {
     labels: rows.map((row) => row.event_name || getEventTypeLabel(row.event_type)),
-    values: rows.map((row) => Number(row.percentage || 0)),
+    values: rows.map((row) => {
+      const percentage = Number(row.percentage || 0)
+      return {
+        value: percentage,
+        itemStyle: {
+          color: percentage >= threshold ? '#dc2626' : '#0f766e',
+        },
+      }
+    }),
   }
 }
 
 const buildTimeTrendSeries = () => {
   const rows = Array.isArray(securityLogStatsDailyTrend.value) ? securityLogStatsDailyTrend.value : []
-  const labels = rows.map((row) => String(row.date || ''))
+  const previousRows = Array.isArray(securityLogStatsPreviousTrend.value) ? securityLogStatsPreviousTrend.value : []
+  const labels = rows.map((row) => String(row.period || row.date || ''))
+  const previousMap = Object.fromEntries(
+    previousRows.map((row) => [String(row.period || row.date || ''), Number(row.count || 0)]),
+  )
   return {
     labels,
     values: rows.map((row) => Number(row.count || 0)),
+    previousValues: labels.map((label) => previousMap[label] ?? 0),
+    hasPrevious: previousRows.length > 0,
   }
 }
 
@@ -125,7 +224,14 @@ const renderEventShareChart = async () => {
 
   const { labels, values } = buildEventShareSeries()
   eventShareChart.setOption({
-    tooltip: { trigger: 'axis', valueFormatter: (value) => `${value}%` },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params = []) => {
+        const first = Array.isArray(params) ? params[0] : params
+        const value = Number(first?.value?.value ?? first?.value ?? 0)
+        return `${first?.axisValueLabel || ''}<br/>占比：${value}%`
+      },
+    },
     xAxis: {
       type: 'category',
       data: labels,
@@ -153,9 +259,13 @@ const renderTimeTrendChart = async () => {
     timeTrendChart = echarts.init(timeTrendChartRef.value)
   }
 
-  const { labels, values } = buildTimeTrendSeries()
+  const { labels, values, previousValues, hasPrevious } = buildTimeTrendSeries()
   timeTrendChart.setOption({
     tooltip: { trigger: 'axis' },
+    legend: {
+      top: 0,
+      data: hasPrevious ? ['本周期', '上周期'] : ['本周期'],
+    },
     xAxis: {
       type: 'category',
       data: labels,
@@ -168,6 +278,7 @@ const renderTimeTrendChart = async () => {
     },
     series: [
       {
+        name: '本周期',
         type: 'line',
         smooth: true,
         data: values,
@@ -175,6 +286,18 @@ const renderTimeTrendChart = async () => {
         lineStyle: { color: '#f97316', width: 2 },
         areaStyle: { color: 'rgba(249, 115, 22, 0.12)' },
       },
+      ...(hasPrevious
+        ? [
+            {
+              name: '上周期',
+              type: 'line',
+              smooth: true,
+              data: previousValues,
+              itemStyle: { color: '#64748b' },
+              lineStyle: { color: '#64748b', width: 2, type: 'dashed' },
+            },
+          ]
+        : []),
     ],
   })
 }
@@ -253,6 +376,42 @@ const onPerPageChange = async () => {
   await onFetchSecurityLogs()
 }
 
+const onGranularityChange = async () => {
+  await onFetchSecurityLogs()
+}
+
+const onCompareModeChange = async () => {
+  await onFetchSecurityLogs()
+}
+
+const onAlertThresholdChange = () => {
+  securityLogForm.value.stats_alert_threshold = alertThreshold.value
+  const matchedPreset = alertPresetOptions.find((item) => item.threshold === alertThreshold.value)
+  securityLogForm.value.stats_alert_preset = matchedPreset ? matchedPreset.value : 'custom'
+  void renderEventShareChart()
+}
+
+const onAlertPresetChange = () => {
+  const raw = String(securityLogForm.value.stats_alert_preset || 'standard').trim().toLowerCase()
+  const matchedPreset = alertPresetOptions.find((item) => item.value === raw)
+  if (!matchedPreset) {
+    securityLogForm.value.stats_alert_preset = 'custom'
+    return
+  }
+  securityLogForm.value.stats_alert_preset = matchedPreset.value
+  securityLogForm.value.stats_alert_threshold = matchedPreset.threshold
+  void renderEventShareChart()
+}
+
+const onAnomalyTopNChange = () => {
+  securityLogForm.value.stats_anomaly_top_n = anomalyTopN.value
+}
+
+const onDrilldownDimensionChange = () => {
+  const raw = String(securityLogForm.value.stats_drilldown_dimension || 'username').trim().toLowerCase()
+  securityLogForm.value.stats_drilldown_dimension = raw === 'client_ip' ? 'client_ip' : 'username'
+}
+
 const onQuickRange = async (hours) => {
   const end = new Date()
   const start = new Date(end.getTime() - hours * 60 * 60 * 1000)
@@ -270,7 +429,7 @@ const onClearTimeRange = async () => {
 }
 
 watch(
-  [securityLogStatsEventShare, securityLogStatsDailyTrend],
+  [securityLogStatsEventShare, securityLogStatsDailyTrend, securityLogStatsPreviousTrend, alertThreshold],
   () => {
     void Promise.all([renderEventShareChart(), renderTimeTrendChart()])
   },
@@ -375,6 +534,59 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="row">
+      <select v-model="securityLogForm.stats_granularity" data-testid="security-logs-granularity" @change="onGranularityChange">
+        <option v-for="option in granularityOptions" :key="option.value" :value="option.value">
+          统计粒度：{{ option.label }}
+        </option>
+      </select>
+      <select
+        v-model="securityLogForm.stats_event_compare_mode"
+        data-testid="security-logs-compare-mode"
+        @change="onCompareModeChange"
+      >
+        <option v-for="option in compareModeOptions" :key="option.value" :value="option.value">
+          事件口径：{{ option.label }}
+        </option>
+      </select>
+      <input
+        v-model.number="securityLogForm.stats_alert_threshold"
+        data-testid="security-logs-alert-threshold"
+        type="number"
+        min="0"
+        max="100"
+        step="1"
+        placeholder="异常阈值(%)"
+        @change="onAlertThresholdChange"
+      />
+      <select
+        v-model="securityLogForm.stats_alert_preset"
+        data-testid="security-logs-alert-preset"
+        @change="onAlertPresetChange"
+      >
+        <option v-for="option in alertPresetOptions" :key="option.value" :value="option.value">
+          阈值模板：{{ option.label }}
+        </option>
+        <option value="custom">阈值模板：自定义</option>
+      </select>
+      <input
+        v-model.number="securityLogForm.stats_anomaly_top_n"
+        data-testid="security-logs-anomaly-top-n"
+        type="number"
+        min="1"
+        max="10"
+        step="1"
+        placeholder="异常TopN"
+        @change="onAnomalyTopNChange"
+      />
+      <select
+        v-model="securityLogForm.stats_drilldown_dimension"
+        data-testid="security-logs-drilldown-dimension"
+        @change="onDrilldownDimensionChange"
+      >
+        <option v-for="option in drilldownDimensionOptions" :key="option.value" :value="option.value">
+          下钻维度：{{ option.label }}
+        </option>
+      </select>
       <select v-model="securityLogForm.export_fields" data-testid="security-logs-export-fields">
         <option value="full">导出详情字段（full）</option>
         <option value="basic">导出基础字段（basic）</option>
@@ -404,6 +616,15 @@ onBeforeUnmount(() => {
         @click="onExportSecurityLogs"
       >
         {{ loading.securityLogsExport ? '导出中...' : '导出 CSV' }}
+      </button>
+      <button
+        data-testid="security-logs-export-stats-snapshot"
+        class="ghost-btn"
+        :disabled="loading.securityLogsStatsSnapshot"
+        :class="{ 'is-loading': loading.securityLogsStatsSnapshot }"
+        @click="onExportSecurityLogStatsSnapshot"
+      >
+        {{ loading.securityLogsStatsSnapshot ? '导出中...' : '导出统计快照(JSON)' }}
       </button>
       <button data-testid="security-logs-reset" class="ghost-btn" :disabled="loading.securityLogs" @click="onReset">
         重置筛选
@@ -462,10 +683,61 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <article class="security-logs-compare-card" data-testid="security-logs-period-comparison">
+      <h3>趋势区间对比（上周期 vs 本周期）</h3>
+      <p v-if="hasPeriodComparison" class="hint">{{ periodComparisonSummary }}</p>
+      <p v-else class="hint">设置开始时间与结束时间后查询，即可自动展示上周期对比。</p>
+      <p v-if="periodComparisonRange" class="hint">{{ periodComparisonRange }}</p>
+    </article>
+
     <div class="security-logs-chart-grid">
       <article class="security-logs-chart-card">
-        <h3>事件占比（全量筛选）</h3>
-        <p class="hint">基于当前筛选条件的全量日志统计</p>
+        <h3>异常事件 Top {{ anomalyTopN }} 榜单</h3>
+        <p class="hint">基于当前统计口径，聚焦高风险事件类型。</p>
+        <p v-if="!anomalyTopNRows.length" data-testid="security-logs-anomaly-top-empty" class="hint">
+          当前筛选条件下暂无异常事件。
+        </p>
+        <ol v-else data-testid="security-logs-anomaly-top-list" class="rank-list">
+          <li v-for="(item, index) in anomalyTopNRows" :key="`${item.event_type}-${index}`">
+            <span>{{ index + 1 }}. {{ item.event_name }}</span>
+            <span class="hint">{{ item.count }} 次（{{ item.percentage }}%）</span>
+          </li>
+        </ol>
+      </article>
+      <article class="security-logs-chart-card">
+        <h3>账号/IP 下钻统计</h3>
+        <p class="hint">按当前下钻维度展示总量与异常占比。</p>
+        <p v-if="!drilldownRows.length" data-testid="security-logs-drilldown-empty" class="hint">
+          当前筛选条件下暂无下钻统计数据。
+        </p>
+        <div v-else class="logs-table-wrap">
+          <table data-testid="security-logs-drilldown-table" class="logs-table">
+            <thead>
+              <tr>
+                <th>维度值</th>
+                <th>总量</th>
+                <th>异常量</th>
+                <th>异常占比</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in drilldownRows" :key="`${item.key}-${item.total_count}`">
+                <td>{{ item.key }}</td>
+                <td>{{ item.total_count }}</td>
+                <td>{{ item.anomaly_count }}</td>
+                <td>{{ item.anomaly_percentage }}%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </div>
+
+    <div class="security-logs-chart-grid">
+      <article class="security-logs-chart-card">
+        <h3>事件占比（可切换口径）</h3>
+        <p class="hint">支持“单选事件/全部事件”切换，超过阈值自动高亮</p>
+        <p data-testid="security-logs-event-share-alert-summary" class="hint">{{ eventShareAlertSummary }}</p>
         <div
           ref="eventShareChartRef"
           data-testid="security-logs-event-share-chart"
@@ -475,7 +747,7 @@ onBeforeUnmount(() => {
       </article>
       <article class="security-logs-chart-card">
         <h3>时间趋势（全量筛选）</h3>
-        <p class="hint">按日期聚合日志数量，查询后自动联动更新</p>
+        <p class="hint">按{{ getGranularityLabel(securityLogStatsGranularity) }}聚合，支持上周期对比</p>
         <div
           ref="timeTrendChartRef"
           data-testid="security-logs-time-trend-chart"

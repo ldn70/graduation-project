@@ -392,6 +392,36 @@ button.is-loading::before {
   font-size: 15px;
 }
 
+.rank-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.rank-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fafdfc;
+}
+
+.security-logs-compare-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+  background: linear-gradient(135deg, #f7faf9, #ffffff);
+}
+
+.security-logs-compare-card h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
 .security-logs-chart {
   height: 240px;
 }

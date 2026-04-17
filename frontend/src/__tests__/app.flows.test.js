@@ -58,8 +58,25 @@ vi.mock('../api', () => {
     data: {
       data: {
         total: 1,
+        granularity: 'day',
         event_share: [{ event_type: 'LOGIN_SUCCESS', event_name: '登录成功', count: 1, percentage: 100 }],
+        time_trend: [{ period: '2026-04-16', count: 1 }],
         daily_trend: [{ date: '2026-04-16', count: 1 }],
+        period_comparison: {
+          enabled: true,
+          current: { total: 1, start_time: '2026-04-16T00:00:00+08:00', end_time: '2026-04-17T00:00:00+08:00' },
+          previous: { total: 0, start_time: '2026-04-15T00:00:00+08:00', end_time: '2026-04-16T00:00:00+08:00' },
+          change: { count: 1, percentage: 100 },
+        },
+        trend_comparison: {
+          current: [{ period: '2026-04-16', count: 1 }],
+          previous: [{ period: '2026-04-16', count: 0 }],
+        },
+        anomaly_event_rank: [{ event_type: 'LOGIN_FAILED', event_name: '登录失败', count: 1, percentage: 100 }],
+        drilldown: {
+          by_username: [{ key: 'demo_user', total_count: 1, anomaly_count: 1, share_percentage: 100, anomaly_percentage: 100 }],
+          by_client_ip: [{ key: '127.0.0.1', total_count: 1, anomaly_count: 1, share_percentage: 100, anomaly_percentage: 100 }],
+        },
       },
     },
   }))
@@ -482,11 +499,183 @@ describe('App key flows', () => {
     expect(lastCall.event_type).toBe('LOGIN_SUCCESS')
     expect(statsCall.username).toBe('demo_user')
     expect(statsCall.event_type).toBe('LOGIN_SUCCESS')
+    expect(statsCall.granularity).toBe('day')
     expect(statsCall.page).toBeUndefined()
     expect(statsCall.per_page).toBeUndefined()
     expect(wrapper.get('[data-testid="security-logs-total"]').text()).toContain('共 1 条')
     expect(wrapper.get('[data-testid="security-logs-event-label"]').text()).toContain('登录成功')
     expect(wrapper.get('[data-testid="security-logs-table"]').text()).toContain('LOGIN_SUCCESS')
+  })
+
+  it('passes selected granularity and shows period comparison summary', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+    vi.mocked(api.fetchSecurityLogs).mockClear()
+    vi.mocked(api.fetchSecurityLogStats).mockClear()
+
+    vi.mocked(api.fetchSecurityLogStats).mockResolvedValueOnce({
+      data: {
+        data: {
+          total: 2,
+          granularity: 'month',
+          event_share: [{ event_type: 'LOGIN_SUCCESS', event_name: '登录成功', count: 2, percentage: 100 }],
+          time_trend: [{ period: '2026-04', count: 2 }],
+          period_comparison: {
+            enabled: true,
+            current: { total: 2, start_time: '2026-04-01T00:00:00+08:00', end_time: '2026-04-30T23:59:59+08:00' },
+            previous: { total: 1, start_time: '2026-03-01T00:00:00+08:00', end_time: '2026-03-31T23:59:59+08:00' },
+            change: { count: 1, percentage: 100 },
+          },
+          trend_comparison: {
+            current: [{ period: '2026-04', count: 2 }],
+            previous: [{ period: '2026-04', count: 1 }],
+          },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="security-logs-granularity"]').setValue('month')
+    await flushPromises()
+
+    const statsCall = vi.mocked(api.fetchSecurityLogStats).mock.calls.at(-1)?.[0]
+    expect(statsCall.granularity).toBe('month')
+    expect(wrapper.get('[data-testid="security-logs-period-comparison"]').text()).toContain('本周期 2 条')
+    expect(wrapper.get('[data-testid="security-logs-period-comparison"]').text()).toContain('上周期 1 条')
+  })
+
+  it('uses all-event compare mode for stats while keeping list event filter', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    await wrapper.get('[data-testid="security-logs-event-type"]').setValue('LOGIN_SUCCESS')
+    vi.mocked(api.fetchSecurityLogs).mockClear()
+    vi.mocked(api.fetchSecurityLogStats).mockClear()
+
+    await wrapper.get('[data-testid="security-logs-compare-mode"]').setValue('all')
+    await flushPromises()
+
+    const listCall = vi.mocked(api.fetchSecurityLogs).mock.calls.at(-1)?.[0]
+    const statsCall = vi.mocked(api.fetchSecurityLogStats).mock.calls.at(-1)?.[0]
+    expect(listCall.event_type).toBe('LOGIN_SUCCESS')
+    expect(statsCall.event_type).toBeUndefined()
+  })
+
+  it('shows alert-threshold summary for event-share chart', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    vi.mocked(api.fetchSecurityLogStats).mockResolvedValueOnce({
+      data: {
+        data: {
+          total: 10,
+          granularity: 'day',
+          event_share: [
+            { event_type: 'LOGIN_SUCCESS', event_name: '登录成功', count: 6, percentage: 60 },
+            { event_type: 'LOGIN_FAILED', event_name: '登录失败', count: 3, percentage: 30 },
+            { event_type: 'LOGIN_LOCK_BLOCKED', event_name: '封禁中拦截', count: 1, percentage: 10 },
+          ],
+          time_trend: [{ period: '2026-04-16', count: 10 }],
+          trend_comparison: { current: [{ period: '2026-04-16', count: 10 }], previous: [] },
+          period_comparison: { enabled: false, current: { total: 10 }, previous: { total: 0 }, change: { count: 10, percentage: 100 } },
+          anomaly_event_rank: [
+            { event_type: 'LOGIN_FAILED', event_name: '登录失败', count: 3, percentage: 30 },
+            { event_type: 'LOGIN_LOCK_BLOCKED', event_name: '封禁中拦截', count: 1, percentage: 10 },
+          ],
+          drilldown: {
+            by_username: [
+              { key: 'alice', total_count: 6, anomaly_count: 2, share_percentage: 60, anomaly_percentage: 33.33 },
+              { key: 'bob', total_count: 4, anomaly_count: 2, share_percentage: 40, anomaly_percentage: 50 },
+            ],
+            by_client_ip: [
+              { key: '10.0.0.1', total_count: 7, anomaly_count: 2, share_percentage: 70, anomaly_percentage: 28.57 },
+              { key: '10.0.0.2', total_count: 3, anomaly_count: 2, share_percentage: 30, anomaly_percentage: 66.67 },
+            ],
+          },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="security-logs-alert-threshold"]').setValue('50')
+    await wrapper.get('[data-testid="security-logs-query"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="security-logs-event-share-alert-summary"]').text()).toContain('阈值 50%')
+    expect(wrapper.get('[data-testid="security-logs-event-share-alert-summary"]').text()).toContain('1 类事件')
+  })
+
+  it('applies strict alert preset and syncs threshold input', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    await wrapper.get('[data-testid="security-logs-alert-preset"]').setValue('strict')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="security-logs-alert-threshold"]').element.value).toBe('50')
+    expect(wrapper.get('[data-testid="security-logs-event-share-alert-summary"]').text()).toContain('阈值 50%')
+  })
+
+  it('renders anomaly top list with selected top-n', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    vi.mocked(api.fetchSecurityLogStats).mockResolvedValueOnce({
+      data: {
+        data: {
+          total: 12,
+          granularity: 'day',
+          event_share: [],
+          time_trend: [{ period: '2026-04-16', count: 12 }],
+          trend_comparison: { current: [{ period: '2026-04-16', count: 12 }], previous: [] },
+          period_comparison: { enabled: false, current: { total: 12 }, previous: { total: 0 }, change: { count: 12, percentage: 100 } },
+          anomaly_event_rank: [
+            { event_type: 'LOGIN_FAILED', event_name: '登录失败', count: 6, percentage: 50 },
+            { event_type: 'LOGIN_LOCK_TRIGGERED', event_name: '触发封禁', count: 4, percentage: 33.33 },
+            { event_type: 'LOGIN_LOCK_BLOCKED', event_name: '封禁中拦截', count: 2, percentage: 16.67 },
+          ],
+          drilldown: { by_username: [], by_client_ip: [] },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="security-logs-anomaly-top-n"]').setValue('2')
+    await wrapper.get('[data-testid="security-logs-query"]').trigger('click')
+    await flushPromises()
+
+    const rows = wrapper.get('[data-testid="security-logs-anomaly-top-list"]').findAll('li')
+    expect(rows.length).toBe(2)
+    expect(rows[0].text()).toContain('登录失败')
+    expect(rows[1].text()).toContain('触发封禁')
+  })
+
+  it('switches drilldown table between username and ip dimension', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    vi.mocked(api.fetchSecurityLogStats).mockResolvedValueOnce({
+      data: {
+        data: {
+          total: 6,
+          granularity: 'day',
+          event_share: [],
+          time_trend: [{ period: '2026-04-16', count: 6 }],
+          trend_comparison: { current: [{ period: '2026-04-16', count: 6 }], previous: [] },
+          period_comparison: { enabled: false, current: { total: 6 }, previous: { total: 0 }, change: { count: 6, percentage: 100 } },
+          anomaly_event_rank: [],
+          drilldown: {
+            by_username: [{ key: 'alice', total_count: 4, anomaly_count: 2, share_percentage: 66.67, anomaly_percentage: 50 }],
+            by_client_ip: [{ key: '10.0.0.8', total_count: 6, anomaly_count: 3, share_percentage: 100, anomaly_percentage: 50 }],
+          },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="security-logs-query"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="security-logs-drilldown-table"]').text()).toContain('alice')
+
+    await wrapper.get('[data-testid="security-logs-drilldown-dimension"]').setValue('client_ip')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="security-logs-drilldown-table"]').text()).toContain('10.0.0.8')
   })
 
   it('renders security-log analytics charts and requests echarts loader', async () => {
@@ -531,6 +720,30 @@ describe('App key flows', () => {
     expect(createObjectURL).toHaveBeenCalled()
     expect(revokeObjectURL).toHaveBeenCalled()
     expect(message.value).toContain('导出成功')
+
+    clickSpy.mockRestore()
+    window.URL.createObjectURL = originalCreate
+    window.URL.revokeObjectURL = originalRevoke
+  })
+
+  it('exports security-log stats snapshot to json', async () => {
+    const wrapper = mount(SecurityLogsView)
+    await flushPromises()
+
+    const originalCreate = window.URL.createObjectURL
+    const originalRevoke = window.URL.revokeObjectURL
+    const createObjectURL = vi.fn(() => 'blob:security-logs-stats')
+    const revokeObjectURL = vi.fn()
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    window.URL.createObjectURL = createObjectURL
+    window.URL.revokeObjectURL = revokeObjectURL
+
+    await wrapper.get('[data-testid="security-logs-export-stats-snapshot"]').trigger('click')
+    await flushPromises()
+
+    expect(createObjectURL).toHaveBeenCalled()
+    expect(revokeObjectURL).toHaveBeenCalled()
+    expect(message.value).toContain('统计快照导出成功')
 
     clickSpy.mockRestore()
     window.URL.createObjectURL = originalCreate
